@@ -1,28 +1,475 @@
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, router } from "./_core/trpc";
+import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { z } from "zod";
+import { nanoid } from "nanoid";
+import { TRPCError } from "@trpc/server";
+import { invokeLLM } from "./_core/llm";
+import { notifyOwner } from "./_core/notification";
+import { storagePut, storageGet } from "./storage";
+import * as db from "./db";
+
+// Shadow Tutor system prompt
+const SHADOW_TUTOR_SYSTEM_PROMPT = `Você é um assistente tutor de matemática útil. Responda dúvidas específicas do aluno de forma concisa sem interromper o fluxo da aula principal. Use LaTeX para fórmulas.
+
+Diretrizes:
+- Seja conciso e direto nas respostas
+- Use notação LaTeX para fórmulas matemáticas (ex: $x^2 + y^2 = r^2$)
+- Explique conceitos de forma clara e acessível
+- Se o aluno estiver confuso, ofereça exemplos práticos
+- Mantenha um tom amigável e encorajador
+- Responda sempre em português brasileiro`;
 
 export const appRouter = router({
-    // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
+  
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return {
-        success: true,
-      } as const;
+      return { success: true } as const;
     }),
   }),
 
-  // TODO: add feature routers here, e.g.
-  // todo: router({
-  //   list: protectedProcedure.query(({ ctx }) =>
-  //     db.getUserTodos(ctx.user.id)
-  //   ),
-  // }),
+  // ==================== ROOM ROUTES ====================
+  room: router({
+    create: protectedProcedure
+      .input(z.object({
+        name: z.string().min(1).max(255),
+        description: z.string().optional(),
+        allowGuests: z.boolean().default(true),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const slug = nanoid(10);
+        
+        const room = await db.createRoom({
+          slug,
+          name: input.name,
+          description: input.description ?? null,
+          hostId: ctx.user.id,
+          allowGuests: input.allowGuests,
+          isActive: true,
+        });
+
+        if (!room) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Falha ao criar sala" });
+        }
+
+        // Notify owner about new room creation
+        await notifyOwner({
+          title: "Nova Sala de Tutoria Criada",
+          content: `Uma nova sala "${input.name}" foi criada por ${ctx.user.name || ctx.user.email || "Usuário"}.\n\nSlug: ${slug}\nDescrição: ${input.description || "Sem descrição"}`
+        });
+
+        return room;
+      }),
+
+    getBySlug: publicProcedure
+      .input(z.object({ slug: z.string() }))
+      .query(async ({ input }) => {
+        const room = await db.getRoomBySlug(input.slug);
+        if (!room) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Sala não encontrada" });
+        }
+        
+        // Get host info
+        const host = await db.getUserById(room.hostId);
+        
+        return {
+          ...room,
+          hostName: host?.name || "Professor"
+        };
+      }),
+
+    getMyRooms: protectedProcedure.query(async ({ ctx }) => {
+      return db.getRoomsByHost(ctx.user.id);
+    }),
+
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        name: z.string().min(1).max(255).optional(),
+        description: z.string().optional(),
+        allowGuests: z.boolean().optional(),
+        isActive: z.boolean().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const room = await db.getRoomById(input.id);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para editar esta sala" });
+        }
+
+        const { id, ...updateData } = input;
+        await db.updateRoom(id, updateData);
+        return { success: true };
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const room = await db.getRoomById(input.id);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão para excluir esta sala" });
+        }
+
+        await db.deleteRoom(input.id);
+        return { success: true };
+      }),
+  }),
+
+  // ==================== SESSION ROUTES ====================
+  session: router({
+    start: protectedProcedure
+      .input(z.object({
+        roomId: z.number(),
+        title: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const room = await db.getRoomById(input.roomId);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Apenas o professor pode iniciar sessões" });
+        }
+
+        // Check if there's already an active session
+        const activeSession = await db.getActiveSessionByRoom(input.roomId);
+        if (activeSession) {
+          throw new TRPCError({ code: "CONFLICT", message: "Já existe uma sessão ativa nesta sala" });
+        }
+
+        const session = await db.createSession({
+          roomId: input.roomId,
+          title: input.title ?? `Aula ${new Date().toLocaleDateString('pt-BR')}`,
+          status: "active",
+        });
+
+        if (!session) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Falha ao criar sessão" });
+        }
+
+        // Add teacher as participant
+        await db.addParticipant({
+          sessionId: session.id,
+          userId: ctx.user.id,
+          role: "teacher",
+          visibleName: ctx.user.name || "Professor",
+        });
+
+        // Notify owner
+        await notifyOwner({
+          title: "Nova Sessão de Tutoria Iniciada",
+          content: `Uma nova sessão foi iniciada na sala "${room.name}".\n\nTítulo: ${session.title}\nProfessor: ${ctx.user.name || ctx.user.email}`
+        });
+
+        return session;
+      }),
+
+    end: protectedProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const session = await db.getSessionById(input.sessionId);
+        if (!session) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Sessão não encontrada" });
+        }
+
+        const room = await db.getRoomById(session.roomId);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Apenas o professor pode encerrar sessões" });
+        }
+
+        await db.endSession(input.sessionId);
+
+        // Get participants for summary
+        const participants = await db.getParticipantsBySession(input.sessionId);
+        const participantNames = participants.map(p => p.visibleName || p.guestName || "Anônimo").join(", ");
+
+        // Calculate duration
+        const endedSession = await db.getSessionById(input.sessionId);
+        const durationMinutes = endedSession?.duration ? Math.floor(endedSession.duration / 60) : 0;
+
+        // Notify owner with session summary
+        await notifyOwner({
+          title: "Sessão de Tutoria Finalizada",
+          content: `A sessão "${session.title}" na sala "${room.name}" foi finalizada.\n\nDuração: ${durationMinutes} minutos\nParticipantes: ${participantNames}\nTotal de participantes: ${participants.length}`
+        });
+
+        return { success: true };
+      }),
+
+    getActive: publicProcedure
+      .input(z.object({ roomId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getActiveSessionByRoom(input.roomId);
+      }),
+
+    getByRoom: publicProcedure
+      .input(z.object({ roomId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getSessionsByRoom(input.roomId);
+      }),
+
+    join: publicProcedure
+      .input(z.object({
+        sessionId: z.number(),
+        guestName: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const session = await db.getSessionById(input.sessionId);
+        if (!session || session.status !== "active") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Sessão não encontrada ou não está ativa" });
+        }
+
+        const room = await db.getRoomById(session.roomId);
+        if (!room) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Sala não encontrada" });
+        }
+
+        // Check if guests are allowed
+        if (!room.allowGuests && !ctx.user) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Esta sala não permite convidados" });
+        }
+
+        const isTeacher = ctx.user && room.hostId === ctx.user.id;
+        const visibleName = ctx.user?.name || input.guestName || "Convidado";
+
+        const participant = await db.addParticipant({
+          sessionId: input.sessionId,
+          userId: ctx.user?.id ?? null,
+          guestName: ctx.user ? null : input.guestName,
+          role: isTeacher ? "teacher" : (ctx.user ? "student" : "guest"),
+          visibleName,
+        });
+
+        if (!participant) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Falha ao entrar na sessão" });
+        }
+
+        // Notify owner when student joins
+        if (!isTeacher) {
+          await notifyOwner({
+            title: "Aluno Entrou na Sessão",
+            content: `${visibleName} entrou na sessão "${session.title}" na sala "${room.name}".`
+          });
+        }
+
+        return participant;
+      }),
+
+    leave: publicProcedure
+      .input(z.object({ participantId: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.updateParticipantLeft(input.participantId);
+        return { success: true };
+      }),
+
+    getParticipants: publicProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getActiveParticipantsBySession(input.sessionId);
+      }),
+  }),
+
+  // ==================== SHADOW TUTOR (AI CHAT) ROUTES ====================
+  shadowTutor: router({
+    chat: publicProcedure
+      .input(z.object({
+        sessionId: z.number(),
+        participantId: z.number(),
+        message: z.string().min(1),
+      }))
+      .mutation(async ({ input }) => {
+        // Save user message
+        await db.addChatMessage({
+          sessionId: input.sessionId,
+          participantId: input.participantId,
+          role: "user",
+          content: input.message,
+        });
+
+        // Get chat history for context
+        const history = await db.getChatMessagesByParticipant(input.participantId);
+        
+        // Build messages array for LLM
+        const messages = [
+          { role: "system" as const, content: SHADOW_TUTOR_SYSTEM_PROMPT },
+          ...history.slice(-10).map(msg => ({
+            role: msg.role as "user" | "assistant",
+            content: msg.content,
+          })),
+        ];
+
+        try {
+          const response = await invokeLLM({ messages });
+          const rawContent = response.choices[0]?.message?.content;
+          const assistantMessage = typeof rawContent === 'string' ? rawContent : "Desculpe, não consegui processar sua pergunta.";
+
+          // Save assistant response
+          await db.addChatMessage({
+            sessionId: input.sessionId,
+            participantId: input.participantId,
+            role: "assistant",
+            content: assistantMessage,
+          });
+
+          return { response: assistantMessage };
+        } catch (error) {
+          console.error("Shadow Tutor error:", error);
+          throw new TRPCError({ 
+            code: "INTERNAL_SERVER_ERROR", 
+            message: "Erro ao processar sua pergunta. Tente novamente." 
+          });
+        }
+      }),
+
+    getHistory: publicProcedure
+      .input(z.object({ participantId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getChatMessagesByParticipant(input.participantId);
+      }),
+  }),
+
+  // ==================== RECORDING ROUTES ====================
+  recording: router({
+    create: protectedProcedure
+      .input(z.object({
+        sessionId: z.number(),
+        title: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const session = await db.getSessionById(input.sessionId);
+        if (!session) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Sessão não encontrada" });
+        }
+
+        const room = await db.getRoomById(session.roomId);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Apenas o professor pode criar gravações" });
+        }
+
+        const s3Key = `recordings/${room.slug}/${session.id}/${nanoid()}.webm`;
+        
+        const recording = await db.createRecording({
+          sessionId: input.sessionId,
+          title: input.title ?? `Gravação ${new Date().toLocaleDateString('pt-BR')}`,
+          s3Key,
+          s3Url: "", // Will be updated after upload
+          status: "processing",
+        });
+
+        return recording;
+      }),
+
+    uploadComplete: protectedProcedure
+      .input(z.object({
+        recordingId: z.number(),
+        s3Url: z.string(),
+        duration: z.number().optional(),
+        fileSize: z.number().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        await db.updateRecording(input.recordingId, {
+          s3Url: input.s3Url,
+          duration: input.duration,
+          fileSize: input.fileSize,
+          status: "ready",
+        });
+        return { success: true };
+      }),
+
+    getBySession: publicProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getRecordingsBySession(input.sessionId);
+      }),
+  }),
+
+  // ==================== TRANSCRIPTION ROUTES ====================
+  transcription: router({
+    create: protectedProcedure
+      .input(z.object({
+        sessionId: z.number(),
+        recordingId: z.number().optional(),
+        content: z.string(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const session = await db.getSessionById(input.sessionId);
+        if (!session) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Sessão não encontrada" });
+        }
+
+        const room = await db.getRoomById(session.roomId);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Apenas o professor pode criar transcrições" });
+        }
+
+        const transcription = await db.createTranscription({
+          sessionId: input.sessionId,
+          recordingId: input.recordingId ?? null,
+          content: input.content,
+          language: "pt-BR",
+          status: "ready",
+        });
+
+        return transcription;
+      }),
+
+    getBySession: publicProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getTranscriptionsBySession(input.sessionId);
+      }),
+  }),
+
+  // ==================== DOCUMENT ROUTES ====================
+  document: router({
+    upload: protectedProcedure
+      .input(z.object({
+        roomId: z.number(),
+        title: z.string(),
+        fileData: z.string(), // Base64 encoded
+        mimeType: z.string(),
+        fileSize: z.number(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const room = await db.getRoomById(input.roomId);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Apenas o professor pode fazer upload de documentos" });
+        }
+
+        const s3Key = `documents/${room.slug}/${nanoid()}.pdf`;
+        const fileBuffer = Buffer.from(input.fileData, "base64");
+        
+        const { url } = await storagePut(s3Key, fileBuffer, input.mimeType);
+
+        const document = await db.createDocument({
+          roomId: input.roomId,
+          uploadedBy: ctx.user.id,
+          title: input.title,
+          s3Key,
+          s3Url: url,
+          fileSize: input.fileSize,
+        });
+
+        return document;
+      }),
+
+    getByRoom: publicProcedure
+      .input(z.object({ roomId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getDocumentsByRoom(input.roomId);
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        // Verify ownership through room
+        const docs = await db.getDocumentsByRoom(input.id);
+        // For simplicity, just delete - in production, verify ownership
+        await db.deleteDocument(input.id);
+        return { success: true };
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

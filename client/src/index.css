@@ -175,3 +175,79 @@
     }
   }
 }
+
+/* KaTeX styles for math rendering */
+.katex-display {
+  margin: 1rem 0;
+  overflow-x: auto;
+}
+
+.katex {
+  font-size: 1.1em;
+}
+
+/* Custom scrollbar for chat */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: var(--muted);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--muted-foreground);
+  opacity: 0.3;
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  opacity: 0.5;
+}
+
+/* Video grid styles */
+.video-grid {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.video-grid.single {
+  grid-template-columns: 1fr;
+}
+
+.video-grid.two {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+/* PDF viewer styles */
+.pdf-viewer {
+  background: white;
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.pdf-viewer .react-pdf__Page {
+  display: flex;
+  justify-content: center;
+}
+
+/* Shadow Tutor sidebar animation */
+.shadow-tutor-enter {
+  transform: translateX(100%);
+}
+
+.shadow-tutor-enter-active {
+  transform: translateX(0);
+  transition: transform 300ms ease-out;
+}
+
+.shadow-tutor-exit {
+  transform: translateX(0);
+}
+
+.shadow-tutor-exit-active {
+  transform: translateX(100%);
+  transition: transform 300ms ease-in;
+}

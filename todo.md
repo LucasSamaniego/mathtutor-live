@@ -1,0 +1,46 @@
+# MathTutor Live - TODO
+
+## Configuração Inicial
+- [x] Schema do banco de dados (rooms, sessions, participants, recordings, transcriptions)
+- [x] Configurar rotas tRPC para todas as funcionalidades
+- [x] Configurar tema visual (azul, branco, cinza)
+
+## Sistema de Videoconferência
+- [x] Integração com WebRTC para videoconferência (preparado para Daily.co)
+- [x] Diferenciação de papéis (Professor/Aluno)
+- [x] Compartilhamento de tela com baixa latência
+- [x] Geração de links únicos de sessão (app.com/sala/[slug])
+- [x] Acesso de convidados sem login obrigatório
+- [x] Controles de mute e câmera
+
+## Ferramentas Pedagógicas
+- [x] Visualizador de PDF com react-pdf
+- [x] Renderização LaTeX em tempo real com KaTeX
+- [x] Área de input dedicada para sintaxe LaTeX
+- [x] Layout split-screen/grid responsivo
+
+## Shadow Tutor (Assistente IA)
+- [x] Sidebar de chat colapsável exclusivo para estudantes
+- [x] Integração com OpenAI GPT-4o via LLM helper
+- [x] System prompt configurado para tutor de matemática
+- [x] Renderização de fórmulas LaTeX nas respostas
+
+## Gravação e Transcrição
+- [x] Gravação de sessões de videoconferência
+- [x] Armazenamento de vídeos no S3 (estrutura preparada)
+- [x] Metadados de gravação no banco de dados
+- [x] Transcrição automática com Whisper (estrutura preparada)
+- [x] Notas de aula em texto para revisão
+
+## Notificações
+- [x] Notificação quando nova sessão é criada
+- [x] Notificação quando aluno entra na sala
+- [x] Notificação quando sessão é finalizada com resumo
+
+## Interface e UX
+- [x] Design limpo em azul, branco e cinza
+- [x] Interface totalmente em português brasileiro
+- [x] Layout responsivo para desktop (prioridade) e tablets
+- [x] Botão "Perguntar à IA" acessível
+- [x] Página inicial com criação/entrada em salas
+- [x] Dashboard do professor com histórico de sessões
