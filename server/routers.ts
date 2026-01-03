@@ -677,6 +677,78 @@ export const appRouter = router({
         return { success: true };
       }),
   }),
+
+  // ==================== PDF SYNC ROUTES ====================
+  pdfSync: router({
+    // Get current PDF sync state for a session (used by students)
+    getState: publicProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .query(async ({ input }) => {
+        const state = await db.getPdfSyncState(input.sessionId);
+        if (!state) {
+          return null;
+        }
+        
+        // Get document info if there's a document selected
+        let document = null;
+        if (state.documentId) {
+          const docs = await db.getDocumentsByRoom(0); // We need to get by doc ID
+          // For now, we'll return the state with documentId
+        }
+        
+        return state;
+      }),
+
+    // Update PDF sync state (teacher only)
+    updateState: protectedProcedure
+      .input(z.object({
+        sessionId: z.number(),
+        documentId: z.number().nullable().optional(),
+        currentPage: z.number().min(1).optional(),
+        totalPages: z.number().min(1).optional(),
+        zoomLevel: z.number().min(25).max(400).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        // Verify user is the teacher of this session
+        const session = await db.getSessionById(input.sessionId);
+        if (!session) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Sessão não encontrada" });
+        }
+        
+        const room = await db.getRoomById(session.roomId);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Apenas o professor pode sincronizar o PDF" });
+        }
+
+        const state = await db.updatePdfSyncState(input.sessionId, {
+          documentId: input.documentId,
+          currentPage: input.currentPage,
+          totalPages: input.totalPages,
+          zoomLevel: input.zoomLevel,
+          updatedBy: ctx.user.id,
+        });
+
+        return state;
+      }),
+
+    // Clear PDF sync state (teacher only)
+    clearState: protectedProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const session = await db.getSessionById(input.sessionId);
+        if (!session) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Sessão não encontrada" });
+        }
+        
+        const room = await db.getRoomById(session.roomId);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Apenas o professor pode limpar o estado do PDF" });
+        }
+
+        await db.clearPdfSyncState(input.sessionId);
+        return { success: true };
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

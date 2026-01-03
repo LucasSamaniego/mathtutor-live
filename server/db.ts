@@ -582,3 +582,59 @@ export async function getSessionRanking(sessionId: number): Promise<(Participant
 
   return result;
 }
+
+
+// ==================== PDF SYNC STATE FUNCTIONS ====================
+
+import { pdfSyncState, InsertPdfSyncState, PdfSyncState } from "../drizzle/schema";
+
+export async function getPdfSyncState(sessionId: number): Promise<PdfSyncState | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.select().from(pdfSyncState)
+    .where(eq(pdfSyncState.sessionId, sessionId))
+    .limit(1);
+  return result[0];
+}
+
+export async function updatePdfSyncState(
+  sessionId: number, 
+  data: Partial<InsertPdfSyncState>
+): Promise<PdfSyncState | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  // Check if state exists
+  const existing = await db.select().from(pdfSyncState)
+    .where(eq(pdfSyncState.sessionId, sessionId))
+    .limit(1);
+
+  if (existing.length > 0) {
+    // Update existing state
+    await db.update(pdfSyncState).set(data).where(eq(pdfSyncState.sessionId, sessionId));
+  } else {
+    // Create new state
+    await db.insert(pdfSyncState).values({
+      sessionId,
+      currentPage: data.currentPage || 1,
+      totalPages: data.totalPages || 1,
+      zoomLevel: data.zoomLevel || 100,
+      documentId: data.documentId || null,
+      updatedBy: data.updatedBy || 0,
+    });
+  }
+
+  // Return updated state
+  const updated = await db.select().from(pdfSyncState)
+    .where(eq(pdfSyncState.sessionId, sessionId))
+    .limit(1);
+  return updated[0];
+}
+
+export async function clearPdfSyncState(sessionId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  await db.delete(pdfSyncState).where(eq(pdfSyncState.sessionId, sessionId));
+}

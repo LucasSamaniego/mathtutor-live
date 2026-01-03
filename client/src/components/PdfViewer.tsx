@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { 
@@ -13,14 +14,16 @@ import {
   Loader2,
   Trash2,
   AlertCircle,
-  RefreshCw,
   ExternalLink,
-  X
+  X,
+  Users,
+  Share2
 } from "lucide-react";
 
 interface PdfViewerProps {
   roomId: number;
   isHost: boolean;
+  sessionId?: number | null;
 }
 
 interface DocumentData {
@@ -29,14 +32,14 @@ interface DocumentData {
   s3Url: string | null;
 }
 
-export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
+export function PdfViewer({ roomId, isHost, sessionId }: PdfViewerProps) {
   const [selectedPdf, setSelectedPdf] = useState<string | null>(null);
   const [selectedDocId, setSelectedDocId] = useState<number | null>(null);
   const [localPdfUrl, setLocalPdfUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
-  const [useIframe, setUseIframe] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Cleanup blob URLs on unmount
@@ -54,6 +57,60 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
     { enabled: !!roomId }
   );
 
+  // PDF Sync State - for students to receive teacher's state
+  const { data: syncState, refetch: refetchSyncState } = trpc.pdfSync.getState.useQuery(
+    { sessionId: sessionId || 0 },
+    { 
+      enabled: !!sessionId && !isHost,
+      refetchInterval: 2000, // Poll every 2 seconds for sync updates
+    }
+  );
+
+  // Update sync state mutation (teacher only)
+  const updateSyncMutation = trpc.pdfSync.updateState.useMutation({
+    onSuccess: () => {
+      setIsSyncing(false);
+    },
+    onError: (error) => {
+      console.error("Sync error:", error);
+      setIsSyncing(false);
+    },
+  });
+
+  // Clear sync state mutation
+  const clearSyncMutation = trpc.pdfSync.clearState.useMutation();
+
+  // Sync state to students when teacher changes document
+  const syncToStudents = useCallback((docId: number | null, docUrl: string | null) => {
+    if (!isHost || !sessionId) return;
+    
+    setIsSyncing(true);
+    updateSyncMutation.mutate({
+      sessionId,
+      documentId: docId,
+      currentPage: 1,
+      totalPages: 1,
+    });
+  }, [isHost, sessionId, updateSyncMutation]);
+
+  // Student: auto-load document when sync state changes
+  useEffect(() => {
+    if (isHost || !syncState || !documents) return;
+
+    // If teacher has a document selected
+    if (syncState.documentId) {
+      const doc = documents.find(d => d.id === syncState.documentId);
+      if (doc && doc.s3Url && selectedDocId !== doc.id) {
+        setSelectedDocId(doc.id);
+        setSelectedPdf(doc.s3Url);
+        setPdfError(null);
+      }
+    } else if (selectedDocId && !syncState.documentId) {
+      // Teacher cleared the document
+      clearPdfState();
+    }
+  }, [syncState, documents, isHost, selectedDocId]);
+
   // Upload mutation
   const uploadMutation = trpc.document.upload.useMutation({
     onSuccess: (data) => {
@@ -64,6 +121,8 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
       if (data?.s3Url) {
         setSelectedPdf(data.s3Url);
         setSelectedDocId(data.id);
+        // Sync to students
+        syncToStudents(data.id, data.s3Url);
       }
     },
     onError: (error) => {
@@ -95,7 +154,12 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
     setLocalPdfUrl(null);
     setPdfError(null);
     setIsLoadingPdf(false);
-  }, [localPdfUrl]);
+
+    // Clear sync state if teacher
+    if (isHost && sessionId) {
+      clearSyncMutation.mutate({ sessionId });
+    }
+  }, [localPdfUrl, isHost, sessionId, clearSyncMutation]);
 
   const handleFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -156,7 +220,11 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
     }
 
     // Clear previous state first
-    clearPdfState();
+    if (localPdfUrl && localPdfUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(localPdfUrl);
+    }
+    setLocalPdfUrl(null);
+    
     setSelectedDocId(doc.id);
     setIsLoadingPdf(true);
     setPdfError(null);
@@ -164,7 +232,13 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
     // Use the S3 URL directly
     setSelectedPdf(doc.s3Url);
     setIsLoadingPdf(false);
-  }, [clearPdfState]);
+
+    // Sync to students if teacher
+    if (isHost) {
+      syncToStudents(doc.id, doc.s3Url);
+      toast.success("PDF sincronizado com os alunos!");
+    }
+  }, [localPdfUrl, isHost, syncToStudents]);
 
   const handleIframeLoad = () => {
     setIsLoadingPdf(false);
@@ -218,6 +292,23 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
             </>
           )}
 
+          {/* Sync Status Indicator */}
+          {sessionId && (
+            <div className="flex items-center gap-2 px-2 py-1.5 bg-muted/50 rounded-md">
+              <Share2 className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">
+                {isHost ? (
+                  isSyncing ? "Sincronizando..." : "Sincronizado"
+                ) : (
+                  syncState?.documentId ? "Recebendo do professor" : "Aguardando professor"
+                )}
+              </span>
+              {(isSyncing || (!isHost && syncState?.documentId)) && (
+                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse ml-auto" />
+              )}
+            </div>
+          )}
+
           <div 
             className="flex-1 overflow-y-auto space-y-1" 
             style={{ scrollbarWidth: 'thin' }}
@@ -234,6 +325,13 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
               >
                 <FileText className="h-4 w-4 text-primary shrink-0" />
                 <span className="text-xs truncate flex-1" title={doc.title}>{doc.title}</span>
+                {/* Show sync indicator for the synced document */}
+                {!isHost && syncState?.documentId === doc.id && (
+                  <Badge variant="secondary" className="text-[10px] px-1 py-0">
+                    <Users className="h-2.5 w-2.5 mr-0.5" />
+                    Ao vivo
+                  </Badge>
+                )}
                 {isHost && (
                   <Button
                     variant="ghost"
@@ -273,6 +371,12 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
                 <span className="text-sm text-muted-foreground">
                   {documents?.find(d => d.id === selectedDocId)?.title || "Documento local"}
                 </span>
+                {!isHost && syncState?.documentId === selectedDocId && (
+                  <Badge variant="outline" className="text-xs gap-1">
+                    <Users className="h-3 w-3" />
+                    Sincronizado
+                  </Badge>
+                )}
               </div>
 
               <div className="flex items-center gap-2">
@@ -285,14 +389,16 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
                   <ExternalLink className="h-4 w-4 mr-1" />
                   Abrir
                 </Button>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={clearPdfState}
-                  title="Fechar"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
+                {isHost && (
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={clearPdfState}
+                    title="Fechar"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
               </div>
             </div>
 
@@ -315,9 +421,11 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
                       <ExternalLink className="h-4 w-4 mr-2" />
                       Abrir em nova aba
                     </Button>
-                    <Button variant="outline" size="sm" onClick={clearPdfState}>
-                      Fechar
-                    </Button>
+                    {isHost && (
+                      <Button variant="outline" size="sm" onClick={clearPdfState}>
+                        Fechar
+                      </Button>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -343,7 +451,7 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
                   {isHost 
-                    ? "Envie um PDF ou selecione um da lista" 
+                    ? "Envie um PDF ou selecione um da lista para compartilhar com os alunos" 
                     : "Aguarde o professor compartilhar um documento"
                   }
                 </p>

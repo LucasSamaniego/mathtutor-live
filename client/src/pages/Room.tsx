@@ -515,8 +515,8 @@ export default function Room() {
                   />
                 )}
                 
-                {mainView === "pdf" && isHost && room && (
-                  <PdfViewer roomId={room.id} isHost={isHost} />
+                {mainView === "pdf" && room && (
+                  <PdfViewer roomId={room.id} isHost={isHost || false} sessionId={sessionId} />
                 )}
                 
                 {mainView === "latex" && isHost && (
@@ -528,7 +528,7 @@ export default function Room() {
                 )}
 
                 {/* For students, show what teacher is presenting */}
-                {!isHost && mainView !== "video" && (
+                {!isHost && mainView !== "video" && mainView !== "pdf" && (
                   <div className="h-full flex items-center justify-center">
                     <p className="text-muted-foreground">
                       Aguardando conteúdo do professor...
@@ -538,9 +538,9 @@ export default function Room() {
               </div>
 
               {/* PDF Sidebar (when enabled with video) */}
-              {showPdfSidebar && mainView === "video" && isHost && room && (
+              {showPdfSidebar && mainView === "video" && room && (
                 <div className="w-1/2 border-l p-4 overflow-auto">
-                  <PdfViewer roomId={room.id} isHost={isHost} />
+                  <PdfViewer roomId={room.id} isHost={isHost || false} sessionId={sessionId} />
                 </div>
               )}
             </div>

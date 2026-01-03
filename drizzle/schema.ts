@@ -230,3 +230,21 @@ export const participantScores = mysqlTable("participantScores", {
 
 export type ParticipantScore = typeof participantScores.$inferSelect;
 export type InsertParticipantScore = typeof participantScores.$inferInsert;
+
+
+/**
+ * PDF Sync State table - stores current PDF state for session synchronization
+ */
+export const pdfSyncState = mysqlTable("pdfSyncState", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionId: int("sessionId").notNull().unique(), // References sessions.id - one state per session
+  documentId: int("documentId"), // References documents.id - currently displayed document
+  currentPage: int("currentPage").default(1).notNull(),
+  totalPages: int("totalPages").default(1).notNull(),
+  zoomLevel: int("zoomLevel").default(100).notNull(), // Zoom percentage
+  updatedBy: int("updatedBy").notNull(), // References users.id (teacher who updated)
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type PdfSyncState = typeof pdfSyncState.$inferSelect;
+export type InsertPdfSyncState = typeof pdfSyncState.$inferInsert;

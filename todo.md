@@ -97,3 +97,11 @@
 
 ### Visualizador de PDF
 - [x] PDF ainda não está sendo visualizado - corrigido usando iframe nativo
+
+## Novos Recursos (v2.4)
+
+### Sincronização de PDF
+- [x] Criar tabela/estado para armazenar documento e página atual da sessão
+- [x] Criar rotas tRPC para professor atualizar e alunos receberem estado do PDF
+- [x] Atualizar PdfViewer para sincronizar entre professor e alunos
+- [x] Polling para alunos receberem atualizações em tempo real (a cada 2 segundos)
