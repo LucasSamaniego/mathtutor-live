@@ -216,6 +216,42 @@ export async function addParticipant(participant: InsertParticipant): Promise<Pa
   const db = await getDb();
   if (!db) return undefined;
 
+  // Check if participant already exists in this session (by userId or guestName)
+  let existing: Participant | undefined;
+  
+  if (participant.userId) {
+    // Check by userId for logged-in users
+    const existingByUser = await db.select().from(participants)
+      .where(and(
+        eq(participants.sessionId, participant.sessionId),
+        eq(participants.userId, participant.userId)
+      ))
+      .limit(1);
+    existing = existingByUser[0];
+  } else if (participant.guestName) {
+    // Check by guestName for guests
+    const existingByGuest = await db.select().from(participants)
+      .where(and(
+        eq(participants.sessionId, participant.sessionId),
+        eq(participants.guestName, participant.guestName)
+      ))
+      .limit(1);
+    existing = existingByGuest[0];
+  }
+
+  if (existing) {
+    // Reactivate existing participant (clear leftAt)
+    await db.update(participants).set({ 
+      leftAt: null,
+      visibleName: participant.visibleName || existing.visibleName
+    }).where(eq(participants.id, existing.id));
+    
+    // Return updated participant
+    const updated = await db.select().from(participants).where(eq(participants.id, existing.id)).limit(1);
+    return updated[0];
+  }
+
+  // Create new participant if not exists
   const result = await db.insert(participants).values(participant);
   const insertId = result[0].insertId;
   const created = await db.select().from(participants).where(eq(participants.id, insertId)).limit(1);

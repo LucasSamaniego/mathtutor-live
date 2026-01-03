@@ -109,7 +109,11 @@ export function ShadowTutor({ sessionId, participantId, onClose }: ShadowTutorPr
       </div>
 
       {/* Chat Messages */}
-      <ScrollArea className="flex-1 p-4" ref={scrollRef}>
+      <div 
+        ref={scrollRef}
+        className="flex-1 p-4 overflow-y-auto"
+        style={{ scrollbarWidth: 'thin', scrollbarColor: 'hsl(var(--muted-foreground) / 0.3) transparent' }}
+      >
         <div className="space-y-4">
           {/* Welcome message */}
           {(!history || history.length === 0) && (
@@ -172,7 +176,7 @@ export function ShadowTutor({ sessionId, participantId, onClose }: ShadowTutorPr
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Input */}
       <div className="p-4 border-t shrink-0">

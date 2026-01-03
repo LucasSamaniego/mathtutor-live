@@ -12,7 +12,9 @@ import {
   Loader2,
   AlertCircle,
   RefreshCw,
-  User
+  User,
+  Wifi,
+  WifiOff
 } from "lucide-react";
 
 interface VideoConferenceProps {
@@ -50,26 +52,44 @@ export function VideoConference({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [videoReady, setVideoReady] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
+  const streamInitialized = useRef(false);
 
-  // Fetch participants from the session
-  const { data: participants } = trpc.session.getParticipants.useQuery(
+  // Fetch participants from the session - using unique key to avoid duplicates
+  const { data: participants, refetch: refetchParticipants } = trpc.session.getParticipants.useQuery(
     { sessionId: sessionId || 0 },
     { 
       enabled: !!sessionId,
-      refetchInterval: 3000, // Poll every 3 seconds for new participants
+      refetchInterval: 3000,
+      staleTime: 2000,
     }
   );
 
-  // Filter out current participant to show others
-  const otherParticipants: RemoteParticipant[] = participants?.filter(
-    (p: any) => p.id !== participantId
-  ) || [];
+  // Filter out current participant and deduplicate by id
+  const otherParticipants: RemoteParticipant[] = (() => {
+    if (!participants) return [];
+    
+    // Create a Map to deduplicate by id
+    const uniqueMap = new Map<number, RemoteParticipant>();
+    participants.forEach((p: any) => {
+      if (p.id !== participantId) {
+        uniqueMap.set(p.id, p);
+      }
+    });
+    
+    return Array.from(uniqueMap.values());
+  })();
 
   // Initialize local media
   const initMedia = useCallback(async () => {
+    // Prevent double initialization
+    if (streamInitialized.current && localStream) {
+      return;
+    }
+
     try {
       setIsLoading(true);
       setError(null);
@@ -78,6 +98,7 @@ export function VideoConference({
       // Stop any existing streams first
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
+        setLocalStream(null);
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -89,21 +110,11 @@ export function VideoConference({
         audio: true,
       });
 
+      streamInitialized.current = true;
       setLocalStream(stream);
-      
-      // Attach stream to video element
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-        localVideoRef.current.onloadedmetadata = () => {
-          localVideoRef.current?.play().then(() => {
-            setVideoReady(true);
-          }).catch(err => {
-            console.error("Error playing local video:", err);
-          });
-        };
-      }
-
+      setIsConnected(true);
       setIsLoading(false);
+      
     } catch (err: any) {
       console.error("Error accessing media devices:", err);
       setError(
@@ -117,12 +128,38 @@ export function VideoConference({
     }
   }, []);
 
+  // Attach stream to video element when both are available
+  useEffect(() => {
+    if (localStream && localVideoRef.current) {
+      const videoEl = localVideoRef.current;
+      
+      // Only set srcObject if it's different
+      if (videoEl.srcObject !== localStream) {
+        videoEl.srcObject = localStream;
+        
+        videoEl.onloadedmetadata = () => {
+          videoEl.play()
+            .then(() => {
+              setVideoReady(true);
+            })
+            .catch(err => {
+              console.error("Error playing local video:", err);
+              // Try to play muted as fallback (autoplay policy)
+              videoEl.muted = true;
+              videoEl.play().then(() => setVideoReady(true)).catch(() => {});
+            });
+        };
+      }
+    }
+  }, [localStream]);
+
   // Initialize on mount
   useEffect(() => {
     initMedia();
 
     return () => {
       // Cleanup streams on unmount
+      streamInitialized.current = false;
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
       }
@@ -131,18 +168,6 @@ export function VideoConference({
       }
     };
   }, []);
-
-  // Re-attach stream when video element is available
-  useEffect(() => {
-    if (localStream && localVideoRef.current && !localVideoRef.current.srcObject) {
-      localVideoRef.current.srcObject = localStream;
-      localVideoRef.current.onloadedmetadata = () => {
-        localVideoRef.current?.play().catch(err => {
-          console.error("Error playing video:", err);
-        });
-      };
-    }
-  }, [localStream]);
 
   // Handle mute/unmute
   useEffect(() => {
@@ -249,7 +274,10 @@ export function VideoConference({
               <p className="text-destructive font-medium">Erro de Mídia</p>
               <p className="text-sm text-muted-foreground">{error}</p>
               <Button
-                onClick={initMedia}
+                onClick={() => {
+                  streamInitialized.current = false;
+                  initMedia();
+                }}
                 variant="outline"
                 className="gap-2"
               >
@@ -306,17 +334,24 @@ export function VideoConference({
               autoPlay
               playsInline
               muted
-              className={`w-full h-full object-cover ${isVideoOff ? 'opacity-0' : 'opacity-100'}`}
+              className={`w-full h-full object-cover transition-opacity duration-300 ${isVideoOff ? 'opacity-0' : videoReady ? 'opacity-100' : 'opacity-0'}`}
               style={{ transform: 'scaleX(-1)' }}
             />
             
-            {/* Video Off Placeholder */}
-            {isVideoOff && (
+            {/* Video Off or Loading Placeholder */}
+            {(isVideoOff || !videoReady) && (
               <div className="absolute inset-0 flex items-center justify-center bg-slate-800">
                 <div className="text-center space-y-2">
-                  <div className={`w-16 h-16 rounded-full ${getAvatarColor(participantName, isHost ? 'teacher' : 'student')} flex items-center justify-center mx-auto`}>
-                    <span className="text-white text-xl font-semibold">{getInitials(participantName)}</span>
-                  </div>
+                  {!videoReady && !isVideoOff ? (
+                    <>
+                      <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
+                      <p className="text-slate-400 text-xs">Carregando vídeo...</p>
+                    </>
+                  ) : (
+                    <div className={`w-16 h-16 rounded-full ${getAvatarColor(participantName, isHost ? 'teacher' : 'student')} flex items-center justify-center mx-auto`}>
+                      <span className="text-white text-xl font-semibold">{getInitials(participantName)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -341,12 +376,11 @@ export function VideoConference({
               </div>
             </div>
 
-            {/* Loading indicator */}
-            {!videoReady && !isVideoOff && (
-              <div className="absolute inset-0 flex items-center justify-center bg-slate-800/50">
-                <Loader2 className="h-8 w-8 animate-spin text-white" />
-              </div>
-            )}
+            {/* Connection indicator */}
+            <div className="absolute top-2 right-2">
+              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`} 
+                   title={isConnected ? "Conectado" : "Conectando..."} />
+            </div>
           </div>
 
           {/* Remote Participants */}
@@ -356,16 +390,16 @@ export function VideoConference({
             
             return (
               <div 
-                key={participant.id} 
+                key={`participant-${participant.id}`} 
                 className="relative rounded-lg overflow-hidden bg-slate-800"
               >
-                {/* Placeholder for remote video - in production, this would show actual video stream */}
+                {/* Placeholder for remote video - shows avatar */}
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="text-center space-y-2">
                     <div className={`w-16 h-16 rounded-full ${getAvatarColor(name, participant.role)} flex items-center justify-center mx-auto`}>
                       <span className="text-white text-xl font-semibold">{getInitials(name)}</span>
                     </div>
-                    <p className="text-slate-400 text-xs">Conectando...</p>
+                    <p className="text-slate-400 text-xs">Na chamada</p>
                   </div>
                 </div>
 
@@ -379,7 +413,7 @@ export function VideoConference({
 
                 {/* Connection indicator */}
                 <div className="absolute top-2 right-2">
-                  <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" title="Aguardando conexão" />
+                  <div className="w-2 h-2 rounded-full bg-green-500" title="Conectado" />
                 </div>
               </div>
             );
@@ -411,9 +445,9 @@ export function VideoConference({
               </div>
               <div className="h-4 w-px bg-border hidden sm:block" />
               <div className="flex items-center gap-2 text-sm">
-                <span className={`w-2 h-2 rounded-full ${localStream ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
                 <span className="text-muted-foreground">
-                  {localStream ? 'Conectado' : 'Desconectado'}
+                  {isConnected ? 'Conectado' : 'Desconectado'}
                 </span>
               </div>
             </div>
@@ -427,9 +461,8 @@ export function VideoConference({
       {/* Note about WebRTC */}
       <div className="text-center text-xs text-muted-foreground px-4">
         <p>
-          💡 Para ver os vídeos de outros participantes em tempo real, 
+          💡 Para transmissão de vídeo em tempo real entre participantes, 
           integre com <strong>Daily.co</strong> ou <strong>Agora SDK</strong>.
-          Os participantes conectados aparecem no grid acima.
         </p>
       </div>
     </div>

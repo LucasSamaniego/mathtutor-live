@@ -1,15 +1,18 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { 
   Send, 
   MessageCircle,
   Loader2,
-  Users
+  Users,
+  Bell,
+  BellOff
 } from "lucide-react";
 
 interface LiveChatProps {
@@ -29,18 +32,98 @@ interface ChatMessageType {
 
 export function LiveChat({ sessionId, participantId, participantName, isHost }: LiveChatProps) {
   const [message, setMessage] = useState("");
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [isWindowFocused, setIsWindowFocused] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const lastMessageCountRef = useRef(0);
+
+  // Track window focus for notifications
+  useEffect(() => {
+    const handleFocus = () => {
+      setIsWindowFocused(true);
+      setUnreadCount(0);
+    };
+    const handleBlur = () => setIsWindowFocused(false);
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
+
+  // Play notification sound
+  const playNotificationSound = useCallback(() => {
+    if (!notificationsEnabled) return;
+    
+    try {
+      // Create a simple beep sound using Web Audio API
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.frequency.value = 800;
+      oscillator.type = 'sine';
+      gainNode.gain.value = 0.1;
+      
+      oscillator.start();
+      oscillator.stop(audioContext.currentTime + 0.1);
+    } catch (e) {
+      // Ignore audio errors
+    }
+  }, [notificationsEnabled]);
 
   // Fetch messages with polling for real-time updates
   const { data: messages, refetch } = trpc.liveChat.getMessages.useQuery(
     { sessionId },
     { 
       enabled: !!sessionId,
-      refetchInterval: 2000, // Poll every 2 seconds
+      refetchInterval: 2000,
     }
   );
+
+  // Check for new messages and notify
+  useEffect(() => {
+    if (!messages) return;
+    
+    const currentCount = messages.length;
+    const previousCount = lastMessageCountRef.current;
+    
+    if (currentCount > previousCount && previousCount > 0) {
+      const newMessages = messages.slice(previousCount);
+      const hasNewFromOthers = newMessages.some(
+        (msg: ChatMessageType) => msg.participantId !== participantId
+      );
+      
+      if (hasNewFromOthers) {
+        // Play sound notification
+        playNotificationSound();
+        
+        // Show toast notification
+        const lastNewMsg = newMessages[newMessages.length - 1];
+        if (lastNewMsg && lastNewMsg.participantId !== participantId) {
+          toast.info(`${lastNewMsg.senderName}: ${lastNewMsg.message.slice(0, 50)}${lastNewMsg.message.length > 50 ? '...' : ''}`, {
+            duration: 3000,
+          });
+        }
+        
+        // Update unread count if window not focused
+        if (!isWindowFocused) {
+          setUnreadCount(prev => prev + newMessages.filter((m: ChatMessageType) => m.participantId !== participantId).length);
+        }
+      }
+    }
+    
+    lastMessageCountRef.current = currentCount;
+  }, [messages, participantId, isWindowFocused, playNotificationSound]);
 
   // Send message mutation
   const sendMessageMutation = trpc.liveChat.sendMessage.useMutation({
@@ -113,11 +196,31 @@ export function LiveChat({ sessionId, participantId, participantName, isHost }: 
         <CardTitle className="text-sm flex items-center gap-2">
           <MessageCircle className="h-4 w-4 text-primary" />
           Chat da Aula
-          {messages && messages.length > 0 && (
-            <span className="text-xs text-muted-foreground ml-auto">
-              {messages.length} mensagens
-            </span>
+          {unreadCount > 0 && (
+            <Badge variant="destructive" className="ml-1 h-5 min-w-5 px-1.5">
+              {unreadCount}
+            </Badge>
           )}
+          <div className="ml-auto flex items-center gap-2">
+            {messages && messages.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {messages.length} msgs
+              </span>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setNotificationsEnabled(!notificationsEnabled)}
+              title={notificationsEnabled ? "Desativar notificações" : "Ativar notificações"}
+            >
+              {notificationsEnabled ? (
+                <Bell className="h-3.5 w-3.5 text-primary" />
+              ) : (
+                <BellOff className="h-3.5 w-3.5 text-muted-foreground" />
+              )}
+            </Button>
+          </div>
         </CardTitle>
       </CardHeader>
       

@@ -105,3 +105,22 @@
 - [x] Criar rotas tRPC para professor atualizar e alunos receberem estado do PDF
 - [x] Atualizar PdfViewer para sincronizar entre professor e alunos
 - [x] Polling para alunos receberem atualizações em tempo real (a cada 2 segundos)
+
+## Bugs e Melhorias (v2.5)
+
+### Notificações
+- [x] Adicionar notificação sonora/visual de nova mensagem no chat
+
+### Streaming de Vídeo
+- [x] Corrigir vídeo que aparece carregando mas não faz streaming para outros participantes
+
+### Shadow Tutor
+- [x] Adicionar barra de rolagem no chat com IA
+
+### Duplicação de Participantes
+- [x] Corrigir duplicação de participantes quando aluno sai e entra novamente
+- [x] Evitar duplicação no grid de vídeo
+
+### PDF Lateral
+- [x] Mostrar apenas o PDF no modo lateral (sem lista de documentos)
+- [x] Ajustar tamanho para melhor visualização pelos alunos

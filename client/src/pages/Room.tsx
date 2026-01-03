@@ -38,6 +38,7 @@ import { VideoConference } from "@/components/VideoConference";
 import { LiveChat } from "@/components/LiveChat";
 import { InteractiveGraph } from "@/components/InteractiveGraph";
 import { Gamification } from "@/components/Gamification";
+import { SimplePdfViewer } from "@/components/SimplePdfViewer";
 
 type MainView = "video" | "pdf" | "latex" | "graph";
 type RightPanel = "chat" | "gamification" | "shadowtutor" | null;
@@ -539,8 +540,8 @@ export default function Room() {
 
               {/* PDF Sidebar (when enabled with video) */}
               {showPdfSidebar && mainView === "video" && room && (
-                <div className="w-1/2 border-l p-4 overflow-auto">
-                  <PdfViewer roomId={room.id} isHost={isHost || false} sessionId={sessionId} />
+                <div className="w-[45%] border-l flex flex-col bg-slate-50 dark:bg-slate-900">
+                  <SimplePdfViewer roomId={room.id} isHost={isHost || false} sessionId={sessionId} />
                 </div>
               )}
             </div>
