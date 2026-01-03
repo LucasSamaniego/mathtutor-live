@@ -124,3 +124,23 @@
 ### PDF Lateral
 - [x] Mostrar apenas o PDF no modo lateral (sem lista de documentos)
 - [x] Ajustar tamanho para melhor visualização pelos alunos
+
+## Integração Daily.co (v2.6)
+
+### Configuração
+- [x] Instalar @daily-co/daily-js SDK
+- [x] Criar rotas backend para gerenciar salas Daily.co
+- [x] Configurar variáveis de ambiente para API key (DAILY_API_KEY)
+
+### Componente de Videoconferência
+- [x] Substituir VideoConference atual por integração Daily.co
+- [x] Implementar criação automática de salas Daily.co
+- [x] Exibir vídeos de todos os participantes em tempo real
+- [x] Controles de mute, câmera e compartilhamento de tela
+- [x] Indicadores de status de conexão
+- [x] Fallback para WebRTC local quando API key não configurada
+
+### Funcionalidades
+- [x] Professor como host da sala
+- [x] Alunos entram via link único
+- [x] Sincronização de participantes com banco de dados

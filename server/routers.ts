@@ -749,6 +749,150 @@ export const appRouter = router({
         return { success: true };
       }),
   }),
+
+  // ==================== DAILY.CO VIDEO ROUTES ====================
+  daily: router({
+    // Create a Daily.co room for a session
+    createRoom: protectedProcedure
+      .input(z.object({
+        roomSlug: z.string(),
+        sessionId: z.number(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const apiKey = process.env.DAILY_API_KEY;
+        if (!apiKey) {
+          throw new TRPCError({ 
+            code: "INTERNAL_SERVER_ERROR", 
+            message: "Daily.co API key não configurada" 
+          });
+        }
+
+        // Check if room exists and user is host
+        const room = await db.getRoomBySlug(input.roomSlug);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Apenas o professor pode criar sala de vídeo" });
+        }
+
+        // Create unique room name for Daily.co
+        const dailyRoomName = `mathtutor-${input.roomSlug}-${input.sessionId}`;
+
+        try {
+          const response = await fetch('https://api.daily.co/v1/rooms', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              name: dailyRoomName,
+              privacy: 'public',
+              properties: {
+                max_participants: 50,
+                enable_screenshare: true,
+                enable_chat: false, // We have our own chat
+                start_video_off: false,
+                start_audio_off: false,
+              },
+            }),
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            // If room already exists, get it instead
+            if (error.info === 'a]room with this name already exists') {
+              const getResponse = await fetch(`https://api.daily.co/v1/rooms/${dailyRoomName}`, {
+                headers: { 'Authorization': `Bearer ${apiKey}` },
+              });
+              if (getResponse.ok) {
+                const existingRoom = await getResponse.json();
+                return {
+                  url: existingRoom.url,
+                  name: existingRoom.name,
+                };
+              }
+            }
+            throw new TRPCError({ 
+              code: "INTERNAL_SERVER_ERROR", 
+              message: `Erro ao criar sala Daily.co: ${error.info || 'Unknown error'}` 
+            });
+          }
+
+          const dailyRoom = await response.json();
+          return {
+            url: dailyRoom.url,
+            name: dailyRoom.name,
+          };
+        } catch (error) {
+          console.error('Daily.co API error:', error);
+          throw new TRPCError({ 
+            code: "INTERNAL_SERVER_ERROR", 
+            message: "Erro ao conectar com Daily.co" 
+          });
+        }
+      }),
+
+    // Get or create Daily.co room for a session
+    getRoom: publicProcedure
+      .input(z.object({
+        roomSlug: z.string(),
+        sessionId: z.number(),
+      }))
+      .query(async ({ input }) => {
+        const apiKey = process.env.DAILY_API_KEY;
+        if (!apiKey) {
+          return { url: null, configured: false };
+        }
+
+        const dailyRoomName = `mathtutor-${input.roomSlug}-${input.sessionId}`;
+
+        try {
+          const response = await fetch(`https://api.daily.co/v1/rooms/${dailyRoomName}`, {
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+          });
+
+          if (response.ok) {
+            const room = await response.json();
+            return { url: room.url, name: room.name, configured: true };
+          }
+
+          return { url: null, configured: true };
+        } catch (error) {
+          console.error('Daily.co API error:', error);
+          return { url: null, configured: true };
+        }
+      }),
+
+    // Delete Daily.co room when session ends
+    deleteRoom: protectedProcedure
+      .input(z.object({
+        roomSlug: z.string(),
+        sessionId: z.number(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const apiKey = process.env.DAILY_API_KEY;
+        if (!apiKey) {
+          return { success: false };
+        }
+
+        const room = await db.getRoomBySlug(input.roomSlug);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Apenas o professor pode deletar sala de vídeo" });
+        }
+
+        const dailyRoomName = `mathtutor-${input.roomSlug}-${input.sessionId}`;
+
+        try {
+          await fetch(`https://api.daily.co/v1/rooms/${dailyRoomName}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+          });
+          return { success: true };
+        } catch (error) {
+          console.error('Daily.co delete error:', error);
+          return { success: false };
+        }
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

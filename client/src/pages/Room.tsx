@@ -39,6 +39,7 @@ import { LiveChat } from "@/components/LiveChat";
 import { InteractiveGraph } from "@/components/InteractiveGraph";
 import { Gamification } from "@/components/Gamification";
 import { SimplePdfViewer } from "@/components/SimplePdfViewer";
+import { DailyVideoConference } from "@/components/DailyVideoConference";
 
 type MainView = "video" | "pdf" | "latex" | "graph";
 type RightPanel = "chat" | "gamification" | "shadowtutor" | null;
@@ -504,15 +505,17 @@ export default function Room() {
               {/* Primary Content */}
               <div className={`flex-1 p-4 overflow-auto ${showPdfSidebar && mainView === "video" ? "w-1/2" : ""}`}>
                 {mainView === "video" && (
-                  <VideoConference
+                  <DailyVideoConference
                     roomSlug={slug || ""}
+                    sessionId={sessionId}
                     isHost={isHost || false}
+                    participantName={user?.name || guestName || "Você"}
                     isMuted={isMuted}
                     isVideoOff={isVideoOff}
                     isScreenSharing={isScreenSharing}
-                    sessionId={sessionId}
-                    participantId={participantId}
-                    participantName={user?.name || guestName || "Você"}
+                    onMuteToggle={() => setIsMuted(!isMuted)}
+                    onVideoToggle={() => setIsVideoOff(!isVideoOff)}
+                    onScreenShareToggle={() => setIsScreenSharing(!isScreenSharing)}
                   />
                 )}
                 
