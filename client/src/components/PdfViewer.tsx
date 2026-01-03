@@ -1,5 +1,4 @@
-import { useState, useRef, useCallback } from "react";
-import { Document, Page, pdfjs } from "react-pdf";
+import { useState, useRef, useCallback, useEffect, lazy, Suspense } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
@@ -14,13 +13,9 @@ import {
   Loader2,
   Trash2,
   Eye,
-  AlertCircle
+  AlertCircle,
+  RefreshCw
 } from "lucide-react";
-import "react-pdf/dist/Page/AnnotationLayer.css";
-import "react-pdf/dist/Page/TextLayer.css";
-
-// Set up PDF.js worker - use CDN with correct version
-pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 interface PdfViewerProps {
   roomId: number;
@@ -33,17 +28,44 @@ interface DocumentData {
   s3Url: string | null;
 }
 
+// Lazy load react-pdf to avoid blocking the main thread
+const LazyDocument = lazy(() => 
+  import("react-pdf").then(module => {
+    // Set up PDF.js worker
+    module.pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${module.pdfjs.version}/pdf.worker.min.js`;
+    return { default: module.Document };
+  })
+);
+
+const LazyPage = lazy(() => 
+  import("react-pdf").then(module => ({ default: module.Page }))
+);
+
+// Import CSS for react-pdf
+import "react-pdf/dist/Page/AnnotationLayer.css";
+import "react-pdf/dist/Page/TextLayer.css";
+
 export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
   const [selectedPdf, setSelectedPdf] = useState<string | null>(null);
   const [selectedDocId, setSelectedDocId] = useState<number | null>(null);
   const [localPdfUrl, setLocalPdfUrl] = useState<string | null>(null);
   const [numPages, setNumPages] = useState<number>(0);
   const [pageNumber, setPageNumber] = useState<number>(1);
-  const [scale, setScale] = useState<number>(1.2);
+  const [scale, setScale] = useState<number>(1.0);
   const [isUploading, setIsUploading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
+  const [pdfReady, setPdfReady] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Cleanup blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      if (localPdfUrl) {
+        URL.revokeObjectURL(localPdfUrl);
+      }
+    };
+  }, []);
 
   // Fetch documents
   const { data: documents, refetch: refetchDocs } = trpc.document.getByRoom.useQuery(
@@ -70,15 +92,27 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
       toast.success("PDF removido!");
       refetchDocs();
       if (selectedDocId) {
-        setSelectedPdf(null);
-        setSelectedDocId(null);
-        setLocalPdfUrl(null);
+        clearPdfState();
       }
     },
     onError: (error) => {
       toast.error(error.message || "Erro ao remover PDF");
     },
   });
+
+  const clearPdfState = useCallback(() => {
+    if (localPdfUrl) {
+      URL.revokeObjectURL(localPdfUrl);
+    }
+    setSelectedPdf(null);
+    setSelectedDocId(null);
+    setLocalPdfUrl(null);
+    setNumPages(0);
+    setPageNumber(1);
+    setPdfError(null);
+    setIsLoadingPdf(false);
+    setPdfReady(false);
+  }, [localPdfUrl]);
 
   const handleFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -94,82 +128,99 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
       return;
     }
 
-    // Create local URL for immediate preview
-    const localUrl = URL.createObjectURL(file);
-    setLocalPdfUrl(localUrl);
-    setSelectedPdf(localUrl);
-    setSelectedDocId(null);
-    setPageNumber(1);
-    setPdfError(null);
-    setIsLoadingPdf(true);
+    // Clear previous state
+    clearPdfState();
 
-    // Also upload to server
-    setIsUploading(true);
+    // Use setTimeout to allow UI to update before heavy operations
+    setTimeout(() => {
+      // Create local URL for immediate preview
+      const localUrl = URL.createObjectURL(file);
+      setLocalPdfUrl(localUrl);
+      setSelectedPdf(localUrl);
+      setSelectedDocId(null);
+      setPageNumber(1);
+      setPdfError(null);
+      setIsLoadingPdf(true);
+      setPdfReady(false);
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = (reader.result as string).split(",")[1];
-      uploadMutation.mutate({
-        roomId,
-        title: file.name,
-        fileData: base64,
-        mimeType: file.type,
-        fileSize: file.size,
-      });
-    };
-    reader.onerror = () => {
-      toast.error("Erro ao processar arquivo");
-      setIsUploading(false);
-    };
-    reader.readAsDataURL(file);
+      // Upload to server in background
+      setIsUploading(true);
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(",")[1];
+        uploadMutation.mutate({
+          roomId,
+          title: file.name,
+          fileData: base64,
+          mimeType: file.type,
+          fileSize: file.size,
+        });
+      };
+      reader.onerror = () => {
+        toast.error("Erro ao processar arquivo");
+        setIsUploading(false);
+      };
+      reader.readAsDataURL(file);
+    }, 50);
 
     // Reset input
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
-  }, [roomId, uploadMutation]);
+  }, [roomId, uploadMutation, clearPdfState]);
 
   const handleSelectDocument = useCallback(async (doc: DocumentData) => {
+    if (!doc.s3Url) {
+      toast.error("URL do documento não disponível");
+      return;
+    }
+
+    // Clear previous state first
+    clearPdfState();
+
     setSelectedDocId(doc.id);
     setPdfError(null);
     setIsLoadingPdf(true);
     setPageNumber(1);
-    
-    // Clean up previous local URL if exists
-    if (localPdfUrl) {
-      URL.revokeObjectURL(localPdfUrl);
-      setLocalPdfUrl(null);
-    }
+    setPdfReady(false);
 
-    if (doc.s3Url) {
-      // Try to fetch the PDF and create a blob URL for better compatibility
+    // Use setTimeout to prevent UI blocking
+    setTimeout(async () => {
       try {
-        const response = await fetch(doc.s3Url);
+        const response = await fetch(doc.s3Url!, {
+          mode: 'cors',
+        });
+        
         if (!response.ok) {
-          throw new Error("Failed to fetch PDF");
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
+        
         const blob = await response.blob();
         const blobUrl = URL.createObjectURL(blob);
         setSelectedPdf(blobUrl);
         setLocalPdfUrl(blobUrl);
       } catch (error) {
         console.error("Error fetching PDF:", error);
-        // Fallback to direct URL
+        // Try direct URL as fallback
         setSelectedPdf(doc.s3Url);
+        setLocalPdfUrl(null);
       }
-    }
-  }, [localPdfUrl]);
+    }, 50);
+  }, [clearPdfState]);
 
   const onDocumentLoadSuccess = useCallback(({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
     setIsLoadingPdf(false);
     setPdfError(null);
+    setPdfReady(true);
     toast.success(`PDF carregado: ${numPages} página(s)`);
   }, []);
 
   const onDocumentLoadError = useCallback((error: Error) => {
     console.error("PDF load error:", error);
     setIsLoadingPdf(false);
+    setPdfReady(false);
     setPdfError("Erro ao carregar o PDF. Tente novamente ou selecione outro arquivo.");
   }, []);
 
@@ -182,27 +233,36 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
   };
 
   const zoomIn = () => {
-    setScale((prev) => Math.min(prev + 0.25, 3));
+    setScale((prev) => Math.min(prev + 0.2, 2.5));
   };
 
   const zoomOut = () => {
-    setScale((prev) => Math.max(prev - 0.25, 0.5));
+    setScale((prev) => Math.max(prev - 0.2, 0.5));
   };
 
-  // Cleanup on unmount
-  // Note: We don't use useEffect for cleanup because localPdfUrl changes frequently
+  const retryLoad = () => {
+    if (selectedPdf) {
+      setPdfError(null);
+      setIsLoadingPdf(true);
+      setPdfReady(false);
+      // Force re-render by setting a new reference
+      const currentPdf = selectedPdf;
+      setSelectedPdf(null);
+      setTimeout(() => setSelectedPdf(currentPdf), 100);
+    }
+  };
 
   return (
     <div className="h-full flex gap-4">
       {/* Document List Sidebar */}
-      <Card className="w-64 shrink-0 flex flex-col">
-        <CardHeader className="pb-2 shrink-0">
+      <Card className="w-56 shrink-0 flex flex-col">
+        <CardHeader className="py-3 px-3 shrink-0">
           <CardTitle className="text-sm flex items-center gap-2">
             <FileText className="h-4 w-4" />
             Documentos
           </CardTitle>
         </CardHeader>
-        <CardContent className="flex-1 flex flex-col gap-2 overflow-hidden">
+        <CardContent className="flex-1 flex flex-col gap-2 p-3 pt-0 overflow-hidden">
           {isHost && (
             <>
               <input
@@ -228,7 +288,7 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
             </>
           )}
 
-          <div className="flex-1 overflow-y-auto space-y-1">
+          <div className="flex-1 overflow-y-auto space-y-1" style={{ scrollbarWidth: 'thin' }}>
             {documents?.map((doc) => (
               <div
                 key={doc.id}
@@ -240,49 +300,30 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
                 onClick={() => handleSelectDocument(doc)}
               >
                 <FileText className="h-4 w-4 text-primary shrink-0" />
-                <span className="text-sm truncate flex-1">{doc.title}</span>
-                <div className="flex items-center gap-1 shrink-0">
+                <span className="text-xs truncate flex-1" title={doc.title}>{doc.title}</span>
+                {isHost && (
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-6 w-6"
+                    className="h-6 w-6 shrink-0"
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleSelectDocument(doc);
+                      deleteMutation.mutate({ id: doc.id });
                     }}
-                    title="Visualizar"
+                    title="Remover"
                   >
-                    <Eye className="h-3 w-3 text-muted-foreground" />
+                    <Trash2 className="h-3 w-3 text-destructive" />
                   </Button>
-                  {isHost && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteMutation.mutate({ id: doc.id });
-                      }}
-                      title="Remover"
-                    >
-                      <Trash2 className="h-3 w-3 text-destructive" />
-                    </Button>
-                  )}
-                </div>
+                )}
               </div>
             ))}
 
             {(!documents || documents.length === 0) && (
-              <div className="text-center py-8">
-                <FileText className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-                <p className="text-sm text-muted-foreground">
+              <div className="text-center py-6">
+                <FileText className="h-6 w-6 text-muted-foreground/30 mx-auto mb-2" />
+                <p className="text-xs text-muted-foreground">
                   Nenhum documento
                 </p>
-                {isHost && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Clique em "Enviar PDF" para adicionar
-                  </p>
-                )}
               </div>
             )}
           </div>
@@ -294,102 +335,107 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
         {selectedPdf ? (
           <>
             {/* Controls */}
-            <div className="h-12 bg-card border-b flex items-center justify-between px-4 shrink-0">
-              <div className="flex items-center gap-2">
+            <div className="h-11 bg-card border-b flex items-center justify-between px-3 shrink-0">
+              <div className="flex items-center gap-1">
                 <Button
                   variant="outline"
-                  size="icon"
+                  size="sm"
                   onClick={goToPrevPage}
-                  disabled={pageNumber <= 1 || isLoadingPdf}
+                  disabled={pageNumber <= 1 || isLoadingPdf || !pdfReady}
                 >
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
-                <span className="text-sm min-w-[120px] text-center">
-                  {isLoadingPdf ? "Carregando..." : `Página ${pageNumber} de ${numPages}`}
+                <span className="text-xs min-w-[90px] text-center px-2">
+                  {isLoadingPdf ? "Carregando..." : `${pageNumber} / ${numPages}`}
                 </span>
                 <Button
                   variant="outline"
-                  size="icon"
+                  size="sm"
                   onClick={goToNextPage}
-                  disabled={pageNumber >= numPages || isLoadingPdf}
+                  disabled={pageNumber >= numPages || isLoadingPdf || !pdfReady}
                 >
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
 
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="icon" onClick={zoomOut} disabled={isLoadingPdf}>
+              <div className="flex items-center gap-1">
+                <Button variant="outline" size="sm" onClick={zoomOut} disabled={isLoadingPdf || !pdfReady}>
                   <ZoomOut className="h-4 w-4" />
                 </Button>
-                <span className="text-sm min-w-[60px] text-center">
+                <span className="text-xs min-w-[50px] text-center">
                   {Math.round(scale * 100)}%
                 </span>
-                <Button variant="outline" size="icon" onClick={zoomIn} disabled={isLoadingPdf}>
+                <Button variant="outline" size="sm" onClick={zoomIn} disabled={isLoadingPdf || !pdfReady}>
                   <ZoomIn className="h-4 w-4" />
                 </Button>
               </div>
             </div>
 
             {/* PDF Content */}
-            <div className="flex-1 overflow-auto flex justify-center p-4">
+            <div className="flex-1 overflow-auto flex justify-center p-4" style={{ scrollbarWidth: 'thin' }}>
               {pdfError ? (
                 <div className="flex flex-col items-center justify-center h-full text-center">
-                  <AlertCircle className="h-12 w-12 text-destructive mb-4" />
+                  <AlertCircle className="h-10 w-10 text-destructive mb-3" />
                   <p className="text-destructive font-medium mb-2">Erro ao carregar PDF</p>
-                  <p className="text-sm text-muted-foreground mb-4">{pdfError}</p>
-                  <Button 
-                    variant="outline" 
-                    onClick={() => {
-                      setPdfError(null);
-                      setSelectedPdf(null);
-                      setSelectedDocId(null);
-                    }}
-                  >
-                    Tentar outro arquivo
-                  </Button>
+                  <p className="text-sm text-muted-foreground mb-4 max-w-xs">{pdfError}</p>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={retryLoad}>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Tentar novamente
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={clearPdfState}>
+                      Fechar
+                    </Button>
+                  </div>
                 </div>
               ) : (
-                <Document
-                  file={selectedPdf}
-                  onLoadSuccess={onDocumentLoadSuccess}
-                  onLoadError={onDocumentLoadError}
-                  loading={
-                    <div className="flex flex-col items-center justify-center h-64">
-                      <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
-                      <p className="text-muted-foreground">Carregando PDF...</p>
-                    </div>
-                  }
-                  error={
-                    <div className="flex flex-col items-center justify-center h-64 text-center">
-                      <AlertCircle className="h-8 w-8 text-destructive mb-4" />
-                      <p className="text-destructive">Erro ao carregar PDF</p>
-                      <p className="text-sm text-muted-foreground mt-2">
-                        Verifique se o arquivo é um PDF válido
-                      </p>
-                    </div>
-                  }
-                >
-                  <Page
-                    pageNumber={pageNumber}
-                    scale={scale}
-                    renderTextLayer={true}
-                    renderAnnotationLayer={true}
+                <Suspense fallback={
+                  <div className="flex flex-col items-center justify-center h-64">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
+                    <p className="text-sm text-muted-foreground">Carregando visualizador...</p>
+                  </div>
+                }>
+                  <LazyDocument
+                    file={selectedPdf}
+                    onLoadSuccess={onDocumentLoadSuccess}
+                    onLoadError={onDocumentLoadError}
                     loading={
-                      <div className="flex items-center justify-center h-64">
-                        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                      <div className="flex flex-col items-center justify-center h-64">
+                        <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
+                        <p className="text-sm text-muted-foreground">Carregando PDF...</p>
                       </div>
                     }
-                    className="shadow-lg"
-                  />
-                </Document>
+                    error={
+                      <div className="flex flex-col items-center justify-center h-64 text-center">
+                        <AlertCircle className="h-8 w-8 text-destructive mb-3" />
+                        <p className="text-destructive">Erro ao carregar PDF</p>
+                      </div>
+                    }
+                  >
+                    {pdfReady && (
+                      <LazyPage
+                        pageNumber={pageNumber}
+                        scale={scale}
+                        renderTextLayer={false}
+                        renderAnnotationLayer={false}
+                        loading={
+                          <div className="flex items-center justify-center h-64">
+                            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                          </div>
+                        }
+                        className="shadow-lg"
+                      />
+                    )}
+                  </LazyDocument>
+                </Suspense>
               )}
             </div>
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center">
-            <div className="text-center space-y-4">
-              <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center mx-auto">
-                <FileText className="h-10 w-10 text-muted-foreground/50" />
+            <div className="text-center space-y-3">
+              <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto">
+                <FileText className="h-8 w-8 text-muted-foreground/50" />
               </div>
               <div>
                 <p className="text-muted-foreground font-medium">

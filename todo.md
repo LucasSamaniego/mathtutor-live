@@ -81,3 +81,11 @@
 ### Visualizador de PDF
 - [x] PDF não é visualizado após seleção do arquivo
 - [x] Corrigir componente PdfViewer para renderizar o documento
+
+## Bugs Reportados (v2.2)
+
+### Chat ao Vivo
+- [x] Adicionar barra de rolagem no chat entre participantes
+
+### Visualizador de PDF
+- [x] PDF está travando a aplicação - corrigir carregamento (lazy loading implementado)
