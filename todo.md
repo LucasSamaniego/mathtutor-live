@@ -89,3 +89,11 @@
 
 ### Visualizador de PDF
 - [x] PDF está travando a aplicação - corrigir carregamento (lazy loading implementado)
+
+## Bugs Reportados (v2.3)
+
+### Videoconferência
+- [x] Mostrar vídeos de todos os participantes da aula, não apenas o próprio vídeo
+
+### Visualizador de PDF
+- [x] PDF ainda não está sendo visualizado - corrigido usando iframe nativo

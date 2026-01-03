@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { trpc } from "@/lib/trpc";
 import { 
   Video, 
   VideoOff, 
@@ -10,7 +11,8 @@ import {
   Users,
   Loader2,
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  User
 } from "lucide-react";
 
 interface VideoConferenceProps {
@@ -19,6 +21,18 @@ interface VideoConferenceProps {
   isMuted: boolean;
   isVideoOff: boolean;
   isScreenSharing: boolean;
+  sessionId?: number | null;
+  participantId?: number | null;
+  participantName?: string;
+}
+
+interface RemoteParticipant {
+  id: number;
+  visibleName: string | null;
+  guestName: string | null;
+  role: string;
+  isVideoOff?: boolean;
+  isMuted?: boolean;
 }
 
 export function VideoConference({
@@ -27,6 +41,9 @@ export function VideoConference({
   isMuted,
   isVideoOff,
   isScreenSharing,
+  sessionId,
+  participantId,
+  participantName = "Você",
 }: VideoConferenceProps) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
@@ -36,19 +53,20 @@ export function VideoConference({
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
-  const pipVideoRef = useRef<HTMLVideoElement>(null);
 
-  // Function to attach stream to video element
-  const attachStreamToVideo = useCallback((videoElement: HTMLVideoElement | null, stream: MediaStream | null) => {
-    if (videoElement && stream) {
-      videoElement.srcObject = stream;
-      videoElement.onloadedmetadata = () => {
-        videoElement.play().catch(err => {
-          console.error("Error playing video:", err);
-        });
-      };
+  // Fetch participants from the session
+  const { data: participants } = trpc.session.getParticipants.useQuery(
+    { sessionId: sessionId || 0 },
+    { 
+      enabled: !!sessionId,
+      refetchInterval: 3000, // Poll every 3 seconds for new participants
     }
-  }, []);
+  );
+
+  // Filter out current participant to show others
+  const otherParticipants: RemoteParticipant[] = participants?.filter(
+    (p: any) => p.id !== participantId
+  ) || [];
 
   // Initialize local media
   const initMedia = useCallback(async () => {
@@ -117,9 +135,14 @@ export function VideoConference({
   // Re-attach stream when video element is available
   useEffect(() => {
     if (localStream && localVideoRef.current && !localVideoRef.current.srcObject) {
-      attachStreamToVideo(localVideoRef.current, localStream);
+      localVideoRef.current.srcObject = localStream;
+      localVideoRef.current.onloadedmetadata = () => {
+        localVideoRef.current?.play().catch(err => {
+          console.error("Error playing video:", err);
+        });
+      };
     }
-  }, [localStream, attachStreamToVideo]);
+  }, [localStream]);
 
   // Handle mute/unmute
   useEffect(() => {
@@ -163,16 +186,6 @@ export function VideoConference({
             };
           }
 
-          // Also attach local video to PIP
-          if (pipVideoRef.current && localStream) {
-            pipVideoRef.current.srcObject = localStream;
-            pipVideoRef.current.onloadedmetadata = () => {
-              pipVideoRef.current?.play().catch(err => {
-                console.error("Error playing PIP video:", err);
-              });
-            };
-          }
-
           // Handle when user stops sharing via browser UI
           stream.getVideoTracks()[0].onended = () => {
             setScreenStream(null);
@@ -191,6 +204,29 @@ export function VideoConference({
 
     handleScreenShare();
   }, [isScreenSharing, isHost]);
+
+  const getInitials = (name: string) => {
+    return name
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2);
+  };
+
+  const getAvatarColor = (name: string, role: string) => {
+    if (role === 'teacher') return 'bg-primary';
+    const colors = [
+      "bg-blue-500",
+      "bg-green-500",
+      "bg-purple-500",
+      "bg-orange-500",
+      "bg-pink-500",
+      "bg-teal-500",
+    ];
+    const index = name.charCodeAt(0) % colors.length;
+    return colors[index];
+  };
 
   if (isLoading) {
     return (
@@ -227,12 +263,15 @@ export function VideoConference({
     );
   }
 
+  // Calculate grid layout based on number of participants
+  const totalParticipants = otherParticipants.length + 1; // +1 for self
+  const gridCols = totalParticipants <= 1 ? 1 : totalParticipants <= 4 ? 2 : 3;
+
   return (
     <div className="h-full flex flex-col gap-4">
-      {/* Main Video Area */}
-      <div className="flex-1 relative rounded-lg overflow-hidden bg-slate-900 min-h-[300px]">
-        {/* Screen Share (when active) */}
-        {screenStream ? (
+      {/* Screen Share View (when active) */}
+      {screenStream && (
+        <div className="flex-1 relative rounded-lg overflow-hidden bg-slate-900 min-h-[300px]">
           <video
             ref={screenVideoRef}
             autoPlay
@@ -240,9 +279,28 @@ export function VideoConference({
             muted
             className="w-full h-full object-contain bg-black"
           />
-        ) : (
-          /* Local Video (when no screen share) */
-          <>
+          <div className="absolute bottom-4 left-4 bg-primary/90 text-primary-foreground px-3 py-1.5 rounded-md flex items-center gap-1.5 text-sm font-medium">
+            <Monitor className="h-4 w-4" />
+            <span>Compartilhando Tela</span>
+          </div>
+        </div>
+      )}
+
+      {/* Video Grid */}
+      <div className={`${screenStream ? 'h-32' : 'flex-1'} min-h-[200px]`}>
+        <div 
+          className={`grid gap-3 h-full ${
+            screenStream 
+              ? 'grid-cols-4' 
+              : gridCols === 1 
+                ? 'grid-cols-1' 
+                : gridCols === 2 
+                  ? 'grid-cols-2' 
+                  : 'grid-cols-3'
+          }`}
+        >
+          {/* Local Video (You) */}
+          <div className={`relative rounded-lg overflow-hidden bg-slate-900 ${!screenStream && totalParticipants === 1 ? 'col-span-full' : ''}`}>
             <video
               ref={localVideoRef}
               autoPlay
@@ -256,80 +314,108 @@ export function VideoConference({
             {isVideoOff && (
               <div className="absolute inset-0 flex items-center justify-center bg-slate-800">
                 <div className="text-center space-y-2">
-                  <div className="w-24 h-24 rounded-full bg-slate-700 flex items-center justify-center mx-auto">
-                    <VideoOff className="h-12 w-12 text-slate-400" />
+                  <div className={`w-16 h-16 rounded-full ${getAvatarColor(participantName, isHost ? 'teacher' : 'student')} flex items-center justify-center mx-auto`}>
+                    <span className="text-white text-xl font-semibold">{getInitials(participantName)}</span>
                   </div>
-                  <p className="text-slate-400">Câmera desativada</p>
                 </div>
               </div>
             )}
-          </>
-        )}
 
-        {/* Status Indicators */}
-        <div className="absolute bottom-4 left-4 flex gap-2">
-          {isMuted && (
-            <div className="bg-red-500/90 text-white px-3 py-1.5 rounded-md flex items-center gap-1.5 text-sm font-medium">
-              <MicOff className="h-4 w-4" />
-              <span>Mudo</span>
+            {/* Name Label */}
+            <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
+              <div className="bg-black/60 text-white px-2 py-1 rounded text-xs font-medium flex items-center gap-1.5">
+                <span>{participantName} (Você)</span>
+                {isHost && <span className="text-primary">👨‍🏫</span>}
+              </div>
+              <div className="flex gap-1">
+                {isMuted && (
+                  <div className="bg-red-500/90 text-white p-1 rounded">
+                    <MicOff className="h-3 w-3" />
+                  </div>
+                )}
+                {isVideoOff && (
+                  <div className="bg-red-500/90 text-white p-1 rounded">
+                    <VideoOff className="h-3 w-3" />
+                  </div>
+                )}
+              </div>
             </div>
-          )}
-          {screenStream && (
-            <div className="bg-primary/90 text-primary-foreground px-3 py-1.5 rounded-md flex items-center gap-1.5 text-sm font-medium">
-              <Monitor className="h-4 w-4" />
-              <span>Compartilhando Tela</span>
-            </div>
-          )}
-          {!videoReady && !isVideoOff && !error && (
-            <div className="bg-yellow-500/90 text-white px-3 py-1.5 rounded-md flex items-center gap-1.5 text-sm font-medium">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Carregando vídeo...</span>
+
+            {/* Loading indicator */}
+            {!videoReady && !isVideoOff && (
+              <div className="absolute inset-0 flex items-center justify-center bg-slate-800/50">
+                <Loader2 className="h-8 w-8 animate-spin text-white" />
+              </div>
+            )}
+          </div>
+
+          {/* Remote Participants */}
+          {otherParticipants.map((participant) => {
+            const name = participant.visibleName || participant.guestName || "Participante";
+            const isTeacher = participant.role === 'teacher';
+            
+            return (
+              <div 
+                key={participant.id} 
+                className="relative rounded-lg overflow-hidden bg-slate-800"
+              >
+                {/* Placeholder for remote video - in production, this would show actual video stream */}
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="text-center space-y-2">
+                    <div className={`w-16 h-16 rounded-full ${getAvatarColor(name, participant.role)} flex items-center justify-center mx-auto`}>
+                      <span className="text-white text-xl font-semibold">{getInitials(name)}</span>
+                    </div>
+                    <p className="text-slate-400 text-xs">Conectando...</p>
+                  </div>
+                </div>
+
+                {/* Name Label */}
+                <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
+                  <div className="bg-black/60 text-white px-2 py-1 rounded text-xs font-medium flex items-center gap-1.5">
+                    <span>{name}</span>
+                    {isTeacher && <span className="text-primary">👨‍🏫</span>}
+                  </div>
+                </div>
+
+                {/* Connection indicator */}
+                <div className="absolute top-2 right-2">
+                  <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" title="Aguardando conexão" />
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Empty slots message */}
+          {otherParticipants.length === 0 && !screenStream && (
+            <div className="col-span-1 rounded-lg border-2 border-dashed border-slate-700 flex items-center justify-center bg-slate-800/30">
+              <div className="text-center space-y-2 p-4">
+                <Users className="h-8 w-8 text-slate-500 mx-auto" />
+                <p className="text-slate-500 text-sm">Aguardando participantes...</p>
+                <p className="text-slate-600 text-xs">
+                  Compartilhe o link da sala para outros entrarem
+                </p>
+              </div>
             </div>
           )}
         </div>
-
-        {/* Self View (Picture-in-Picture when screen sharing) */}
-        {screenStream && localStream && !isVideoOff && (
-          <div className="absolute bottom-4 right-4 w-48 aspect-video rounded-lg overflow-hidden border-2 border-white/20 shadow-lg bg-slate-800">
-            <video
-              ref={pipVideoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover"
-              style={{ transform: 'scaleX(-1)' }}
-            />
-          </div>
-        )}
       </div>
 
       {/* Info Banner */}
       <Card className="shrink-0">
         <CardContent className="py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-4 flex-wrap">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Users className="h-4 w-4" />
-                <span>Sala: {roomSlug}</span>
+                <span>{totalParticipants} participante(s)</span>
               </div>
-              <div className="h-4 w-px bg-border" />
+              <div className="h-4 w-px bg-border hidden sm:block" />
               <div className="flex items-center gap-2 text-sm">
                 <span className={`w-2 h-2 rounded-full ${localStream ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
                 <span className="text-muted-foreground">
                   {localStream ? 'Conectado' : 'Desconectado'}
                 </span>
               </div>
-              {localStream && (
-                <>
-                  <div className="h-4 w-px bg-border" />
-                  <div className="flex items-center gap-2 text-sm">
-                    <Video className="h-4 w-4 text-green-500" />
-                    <span className="text-muted-foreground">
-                      {isVideoOff ? 'Câmera desligada' : 'Câmera ligada'}
-                    </span>
-                  </div>
-                </>
-              )}
             </div>
             <div className="text-sm text-muted-foreground font-medium">
               {isHost ? '👨‍🏫 Professor' : '👨‍🎓 Aluno'}
@@ -339,10 +425,11 @@ export function VideoConference({
       </Card>
 
       {/* Note about WebRTC */}
-      <div className="text-center text-xs text-muted-foreground">
+      <div className="text-center text-xs text-muted-foreground px-4">
         <p>
-          Para videoconferência em produção com múltiplos participantes, 
-          integre com Daily.co ou Agora SDK.
+          💡 Para ver os vídeos de outros participantes em tempo real, 
+          integre com <strong>Daily.co</strong> ou <strong>Agora SDK</strong>.
+          Os participantes conectados aparecem no grid acima.
         </p>
       </div>
     </div>

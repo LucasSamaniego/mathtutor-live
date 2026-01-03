@@ -509,6 +509,9 @@ export default function Room() {
                     isMuted={isMuted}
                     isVideoOff={isVideoOff}
                     isScreenSharing={isScreenSharing}
+                    sessionId={sessionId}
+                    participantId={participantId}
+                    participantName={user?.name || guestName || "Você"}
                   />
                 )}
                 

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, lazy, Suspense } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
@@ -12,9 +12,10 @@ import {
   FileText,
   Loader2,
   Trash2,
-  Eye,
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  ExternalLink,
+  X
 } from "lucide-react";
 
 interface PdfViewerProps {
@@ -28,40 +29,20 @@ interface DocumentData {
   s3Url: string | null;
 }
 
-// Lazy load react-pdf to avoid blocking the main thread
-const LazyDocument = lazy(() => 
-  import("react-pdf").then(module => {
-    // Set up PDF.js worker
-    module.pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${module.pdfjs.version}/pdf.worker.min.js`;
-    return { default: module.Document };
-  })
-);
-
-const LazyPage = lazy(() => 
-  import("react-pdf").then(module => ({ default: module.Page }))
-);
-
-// Import CSS for react-pdf
-import "react-pdf/dist/Page/AnnotationLayer.css";
-import "react-pdf/dist/Page/TextLayer.css";
-
 export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
   const [selectedPdf, setSelectedPdf] = useState<string | null>(null);
   const [selectedDocId, setSelectedDocId] = useState<number | null>(null);
   const [localPdfUrl, setLocalPdfUrl] = useState<string | null>(null);
-  const [numPages, setNumPages] = useState<number>(0);
-  const [pageNumber, setPageNumber] = useState<number>(1);
-  const [scale, setScale] = useState<number>(1.0);
   const [isUploading, setIsUploading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
-  const [pdfReady, setPdfReady] = useState(false);
+  const [useIframe, setUseIframe] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Cleanup blob URLs on unmount
   useEffect(() => {
     return () => {
-      if (localPdfUrl) {
+      if (localPdfUrl && localPdfUrl.startsWith('blob:')) {
         URL.revokeObjectURL(localPdfUrl);
       }
     };
@@ -75,10 +56,15 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
 
   // Upload mutation
   const uploadMutation = trpc.document.upload.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast.success("PDF enviado com sucesso!");
       refetchDocs();
       setIsUploading(false);
+      // If we have a URL from the upload, use it
+      if (data?.s3Url) {
+        setSelectedPdf(data.s3Url);
+        setSelectedDocId(data.id);
+      }
     },
     onError: (error) => {
       toast.error(error.message || "Erro ao enviar PDF");
@@ -101,17 +87,14 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
   });
 
   const clearPdfState = useCallback(() => {
-    if (localPdfUrl) {
+    if (localPdfUrl && localPdfUrl.startsWith('blob:')) {
       URL.revokeObjectURL(localPdfUrl);
     }
     setSelectedPdf(null);
     setSelectedDocId(null);
     setLocalPdfUrl(null);
-    setNumPages(0);
-    setPageNumber(1);
     setPdfError(null);
     setIsLoadingPdf(false);
-    setPdfReady(false);
   }, [localPdfUrl]);
 
   const handleFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -130,39 +113,35 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
 
     // Clear previous state
     clearPdfState();
+    setIsLoadingPdf(true);
+    setPdfError(null);
 
-    // Use setTimeout to allow UI to update before heavy operations
-    setTimeout(() => {
-      // Create local URL for immediate preview
-      const localUrl = URL.createObjectURL(file);
-      setLocalPdfUrl(localUrl);
-      setSelectedPdf(localUrl);
-      setSelectedDocId(null);
-      setPageNumber(1);
-      setPdfError(null);
-      setIsLoadingPdf(true);
-      setPdfReady(false);
+    // Create local URL for immediate preview
+    const localUrl = URL.createObjectURL(file);
+    setLocalPdfUrl(localUrl);
+    setSelectedPdf(localUrl);
+    setSelectedDocId(null);
+    setIsLoadingPdf(false);
 
-      // Upload to server in background
-      setIsUploading(true);
+    // Upload to server in background
+    setIsUploading(true);
 
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(",")[1];
-        uploadMutation.mutate({
-          roomId,
-          title: file.name,
-          fileData: base64,
-          mimeType: file.type,
-          fileSize: file.size,
-        });
-      };
-      reader.onerror = () => {
-        toast.error("Erro ao processar arquivo");
-        setIsUploading(false);
-      };
-      reader.readAsDataURL(file);
-    }, 50);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(",")[1];
+      uploadMutation.mutate({
+        roomId,
+        title: file.name,
+        fileData: base64,
+        mimeType: file.type,
+        fileSize: file.size,
+      });
+    };
+    reader.onerror = () => {
+      toast.error("Erro ao processar arquivo");
+      setIsUploading(false);
+    };
+    reader.readAsDataURL(file);
 
     // Reset input
     if (fileInputRef.current) {
@@ -170,7 +149,7 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
     }
   }, [roomId, uploadMutation, clearPdfState]);
 
-  const handleSelectDocument = useCallback(async (doc: DocumentData) => {
+  const handleSelectDocument = useCallback((doc: DocumentData) => {
     if (!doc.s3Url) {
       toast.error("URL do documento não disponível");
       return;
@@ -178,77 +157,28 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
 
     // Clear previous state first
     clearPdfState();
-
     setSelectedDocId(doc.id);
-    setPdfError(null);
     setIsLoadingPdf(true);
-    setPageNumber(1);
-    setPdfReady(false);
+    setPdfError(null);
 
-    // Use setTimeout to prevent UI blocking
-    setTimeout(async () => {
-      try {
-        const response = await fetch(doc.s3Url!, {
-          mode: 'cors',
-        });
-        
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        setSelectedPdf(blobUrl);
-        setLocalPdfUrl(blobUrl);
-      } catch (error) {
-        console.error("Error fetching PDF:", error);
-        // Try direct URL as fallback
-        setSelectedPdf(doc.s3Url);
-        setLocalPdfUrl(null);
-      }
-    }, 50);
+    // Use the S3 URL directly
+    setSelectedPdf(doc.s3Url);
+    setIsLoadingPdf(false);
   }, [clearPdfState]);
 
-  const onDocumentLoadSuccess = useCallback(({ numPages }: { numPages: number }) => {
-    setNumPages(numPages);
+  const handleIframeLoad = () => {
     setIsLoadingPdf(false);
     setPdfError(null);
-    setPdfReady(true);
-    toast.success(`PDF carregado: ${numPages} página(s)`);
-  }, []);
+  };
 
-  const onDocumentLoadError = useCallback((error: Error) => {
-    console.error("PDF load error:", error);
+  const handleIframeError = () => {
     setIsLoadingPdf(false);
-    setPdfReady(false);
-    setPdfError("Erro ao carregar o PDF. Tente novamente ou selecione outro arquivo.");
-  }, []);
-
-  const goToPrevPage = () => {
-    setPageNumber((prev) => Math.max(prev - 1, 1));
+    setPdfError("Erro ao carregar o PDF no visualizador embutido.");
   };
 
-  const goToNextPage = () => {
-    setPageNumber((prev) => Math.min(prev + 1, numPages));
-  };
-
-  const zoomIn = () => {
-    setScale((prev) => Math.min(prev + 0.2, 2.5));
-  };
-
-  const zoomOut = () => {
-    setScale((prev) => Math.max(prev - 0.2, 0.5));
-  };
-
-  const retryLoad = () => {
+  const openInNewTab = () => {
     if (selectedPdf) {
-      setPdfError(null);
-      setIsLoadingPdf(true);
-      setPdfReady(false);
-      // Force re-render by setting a new reference
-      const currentPdf = selectedPdf;
-      setSelectedPdf(null);
-      setTimeout(() => setSelectedPdf(currentPdf), 100);
+      window.open(selectedPdf, '_blank');
     }
   };
 
@@ -288,7 +218,10 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
             </>
           )}
 
-          <div className="flex-1 overflow-y-auto space-y-1" style={{ scrollbarWidth: 'thin' }}>
+          <div 
+            className="flex-1 overflow-y-auto space-y-1" 
+            style={{ scrollbarWidth: 'thin' }}
+          >
             {documents?.map((doc) => (
               <div
                 key={doc.id}
@@ -336,52 +269,51 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
           <>
             {/* Controls */}
             <div className="h-11 bg-card border-b flex items-center justify-between px-3 shrink-0">
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={goToPrevPage}
-                  disabled={pageNumber <= 1 || isLoadingPdf || !pdfReady}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <span className="text-xs min-w-[90px] text-center px-2">
-                  {isLoadingPdf ? "Carregando..." : `${pageNumber} / ${numPages}`}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">
+                  {documents?.find(d => d.id === selectedDocId)?.title || "Documento local"}
                 </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={goToNextPage}
-                  disabled={pageNumber >= numPages || isLoadingPdf || !pdfReady}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
               </div>
 
-              <div className="flex items-center gap-1">
-                <Button variant="outline" size="sm" onClick={zoomOut} disabled={isLoadingPdf || !pdfReady}>
-                  <ZoomOut className="h-4 w-4" />
+              <div className="flex items-center gap-2">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={openInNewTab}
+                  title="Abrir em nova aba"
+                >
+                  <ExternalLink className="h-4 w-4 mr-1" />
+                  Abrir
                 </Button>
-                <span className="text-xs min-w-[50px] text-center">
-                  {Math.round(scale * 100)}%
-                </span>
-                <Button variant="outline" size="sm" onClick={zoomIn} disabled={isLoadingPdf || !pdfReady}>
-                  <ZoomIn className="h-4 w-4" />
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={clearPdfState}
+                  title="Fechar"
+                >
+                  <X className="h-4 w-4" />
                 </Button>
               </div>
             </div>
 
             {/* PDF Content */}
-            <div className="flex-1 overflow-auto flex justify-center p-4" style={{ scrollbarWidth: 'thin' }}>
+            <div className="flex-1 overflow-hidden relative">
+              {isLoadingPdf && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-100 dark:bg-slate-800 z-10">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
+                  <p className="text-sm text-muted-foreground">Carregando PDF...</p>
+                </div>
+              )}
+
               {pdfError ? (
-                <div className="flex flex-col items-center justify-center h-full text-center">
+                <div className="flex flex-col items-center justify-center h-full text-center p-4">
                   <AlertCircle className="h-10 w-10 text-destructive mb-3" />
                   <p className="text-destructive font-medium mb-2">Erro ao carregar PDF</p>
                   <p className="text-sm text-muted-foreground mb-4 max-w-xs">{pdfError}</p>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={retryLoad}>
-                      <RefreshCw className="h-4 w-4 mr-2" />
-                      Tentar novamente
+                  <div className="flex gap-2 flex-wrap justify-center">
+                    <Button variant="outline" size="sm" onClick={openInNewTab}>
+                      <ExternalLink className="h-4 w-4 mr-2" />
+                      Abrir em nova aba
                     </Button>
                     <Button variant="outline" size="sm" onClick={clearPdfState}>
                       Fechar
@@ -389,45 +321,13 @@ export function PdfViewer({ roomId, isHost }: PdfViewerProps) {
                   </div>
                 </div>
               ) : (
-                <Suspense fallback={
-                  <div className="flex flex-col items-center justify-center h-64">
-                    <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
-                    <p className="text-sm text-muted-foreground">Carregando visualizador...</p>
-                  </div>
-                }>
-                  <LazyDocument
-                    file={selectedPdf}
-                    onLoadSuccess={onDocumentLoadSuccess}
-                    onLoadError={onDocumentLoadError}
-                    loading={
-                      <div className="flex flex-col items-center justify-center h-64">
-                        <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
-                        <p className="text-sm text-muted-foreground">Carregando PDF...</p>
-                      </div>
-                    }
-                    error={
-                      <div className="flex flex-col items-center justify-center h-64 text-center">
-                        <AlertCircle className="h-8 w-8 text-destructive mb-3" />
-                        <p className="text-destructive">Erro ao carregar PDF</p>
-                      </div>
-                    }
-                  >
-                    {pdfReady && (
-                      <LazyPage
-                        pageNumber={pageNumber}
-                        scale={scale}
-                        renderTextLayer={false}
-                        renderAnnotationLayer={false}
-                        loading={
-                          <div className="flex items-center justify-center h-64">
-                            <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                          </div>
-                        }
-                        className="shadow-lg"
-                      />
-                    )}
-                  </LazyDocument>
-                </Suspense>
+                <iframe
+                  src={selectedPdf}
+                  className="w-full h-full border-0"
+                  title="PDF Viewer"
+                  onLoad={handleIframeLoad}
+                  onError={handleIframeError}
+                />
               )}
             </div>
           </>
