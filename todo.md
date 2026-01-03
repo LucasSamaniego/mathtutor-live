@@ -144,3 +144,23 @@
 - [x] Professor como host da sala
 - [x] Alunos entram via link único
 - [x] Sincronização de participantes com banco de dados
+
+## Videoconferência WebRTC Gratuita (v2.7)
+
+### Servidor de Sinalização
+- [x] Criar servidor WebSocket para sinalização WebRTC
+- [x] Implementar gerenciamento de salas e participantes
+- [x] Troca de ofertas/respostas SDP entre peers
+- [x] Troca de candidatos ICE
+
+### Componente WebRTC Nativo
+- [x] Implementar conexões peer-to-peer entre participantes
+- [x] Grid de vídeos para múltiplos participantes
+- [x] Controles de mute, câmera e compartilhamento de tela
+- [x] Reconexão automática em caso de falha
+- [x] Indicadores de status de conexão
+
+### Funcionalidades
+- [x] Suporte a mesh network para até 6 participantes
+- [x] Fallback para servidor TURN público gratuito
+- [x] Sem dependência de APIs externas pagas
