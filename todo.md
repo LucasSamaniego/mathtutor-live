@@ -71,3 +71,13 @@
 - [x] Alunos respondem e ganham pontos
 - [x] Ranking em tempo real dos participantes
 - [x] Feedback visual de acerto/erro
+
+## Bugs Reportados (v2.1)
+
+### Vídeo da Câmera
+- [x] Vídeo da câmera não aparece na tela mesmo com câmera ativada
+- [x] Corrigir componente VideoConference para exibir stream local
+
+### Visualizador de PDF
+- [x] PDF não é visualizado após seleção do arquivo
+- [x] Corrigir componente PdfViewer para renderizar o documento

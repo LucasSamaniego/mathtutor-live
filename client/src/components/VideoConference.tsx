@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { 
@@ -7,10 +7,10 @@ import {
   Mic, 
   MicOff, 
   Monitor,
-  MonitorOff,
   Users,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  RefreshCw
 } from "lucide-react";
 
 interface VideoConferenceProps {
@@ -32,46 +32,94 @@ export function VideoConference({
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [videoReady, setVideoReady] = useState(false);
+  
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
+  const pipVideoRef = useRef<HTMLVideoElement>(null);
+
+  // Function to attach stream to video element
+  const attachStreamToVideo = useCallback((videoElement: HTMLVideoElement | null, stream: MediaStream | null) => {
+    if (videoElement && stream) {
+      videoElement.srcObject = stream;
+      videoElement.onloadedmetadata = () => {
+        videoElement.play().catch(err => {
+          console.error("Error playing video:", err);
+        });
+      };
+    }
+  }, []);
 
   // Initialize local media
-  useEffect(() => {
-    const initMedia = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
+  const initMedia = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      setVideoReady(false);
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
-        });
-
-        setLocalStream(stream);
-
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
-      } catch (err: any) {
-        console.error("Error accessing media devices:", err);
-        setError(
-          err.name === "NotAllowedError"
-            ? "Permissão de câmera/microfone negada. Por favor, permita o acesso nas configurações do navegador."
-            : "Erro ao acessar câmera/microfone. Verifique se os dispositivos estão conectados."
-        );
-      } finally {
-        setIsLoading(false);
+      // Stop any existing streams first
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
       }
-    };
 
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: "user"
+        },
+        audio: true,
+      });
+
+      setLocalStream(stream);
+      
+      // Attach stream to video element
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+        localVideoRef.current.onloadedmetadata = () => {
+          localVideoRef.current?.play().then(() => {
+            setVideoReady(true);
+          }).catch(err => {
+            console.error("Error playing local video:", err);
+          });
+        };
+      }
+
+      setIsLoading(false);
+    } catch (err: any) {
+      console.error("Error accessing media devices:", err);
+      setError(
+        err.name === "NotAllowedError"
+          ? "Permissão de câmera/microfone negada. Por favor, permita o acesso nas configurações do navegador."
+          : err.name === "NotFoundError"
+          ? "Câmera ou microfone não encontrado. Verifique se os dispositivos estão conectados."
+          : "Erro ao acessar câmera/microfone. Verifique se os dispositivos estão conectados."
+      );
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Initialize on mount
+  useEffect(() => {
     initMedia();
 
     return () => {
       // Cleanup streams on unmount
-      localStream?.getTracks().forEach((track) => track.stop());
-      screenStream?.getTracks().forEach((track) => track.stop());
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+      }
+      if (screenStream) {
+        screenStream.getTracks().forEach(track => track.stop());
+      }
     };
   }, []);
+
+  // Re-attach stream when video element is available
+  useEffect(() => {
+    if (localStream && localVideoRef.current && !localVideoRef.current.srcObject) {
+      attachStreamToVideo(localVideoRef.current, localStream);
+    }
+  }, [localStream, attachStreamToVideo]);
 
   // Handle mute/unmute
   useEffect(() => {
@@ -97,7 +145,10 @@ export function VideoConference({
       if (isScreenSharing && isHost) {
         try {
           const stream = await navigator.mediaDevices.getDisplayMedia({
-            video: true,
+            video: {
+              width: { ideal: 1920 },
+              height: { ideal: 1080 }
+            },
             audio: false,
           });
 
@@ -105,6 +156,21 @@ export function VideoConference({
 
           if (screenVideoRef.current) {
             screenVideoRef.current.srcObject = stream;
+            screenVideoRef.current.onloadedmetadata = () => {
+              screenVideoRef.current?.play().catch(err => {
+                console.error("Error playing screen share:", err);
+              });
+            };
+          }
+
+          // Also attach local video to PIP
+          if (pipVideoRef.current && localStream) {
+            pipVideoRef.current.srcObject = localStream;
+            pipVideoRef.current.onloadedmetadata = () => {
+              pipVideoRef.current?.play().catch(err => {
+                console.error("Error playing PIP video:", err);
+              });
+            };
           }
 
           // Handle when user stops sharing via browser UI
@@ -116,8 +182,10 @@ export function VideoConference({
         }
       } else {
         // Stop screen sharing
-        screenStream?.getTracks().forEach((track) => track.stop());
-        setScreenStream(null);
+        if (screenStream) {
+          screenStream.getTracks().forEach(track => track.stop());
+          setScreenStream(null);
+        }
       }
     };
 
@@ -145,9 +213,11 @@ export function VideoConference({
               <p className="text-destructive font-medium">Erro de Mídia</p>
               <p className="text-sm text-muted-foreground">{error}</p>
               <Button
-                onClick={() => window.location.reload()}
+                onClick={initMedia}
                 variant="outline"
+                className="gap-2"
               >
+                <RefreshCw className="h-4 w-4" />
                 Tentar Novamente
               </Button>
             </div>
@@ -160,63 +230,74 @@ export function VideoConference({
   return (
     <div className="h-full flex flex-col gap-4">
       {/* Main Video Area */}
-      <div className="flex-1 relative rounded-lg overflow-hidden bg-muted">
+      <div className="flex-1 relative rounded-lg overflow-hidden bg-slate-900 min-h-[300px]">
         {/* Screen Share (when active) */}
         {screenStream ? (
           <video
             ref={screenVideoRef}
             autoPlay
             playsInline
+            muted
             className="w-full h-full object-contain bg-black"
           />
         ) : (
           /* Local Video (when no screen share) */
-          <video
-            ref={localVideoRef}
-            autoPlay
-            playsInline
-            muted
-            className={`w-full h-full object-cover ${isVideoOff ? 'hidden' : ''}`}
-          />
-        )}
-
-        {/* Video Off Placeholder */}
-        {isVideoOff && !screenStream && (
-          <div className="absolute inset-0 flex items-center justify-center bg-muted">
-            <div className="text-center space-y-2">
-              <div className="w-24 h-24 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                <VideoOff className="h-12 w-12 text-primary/50" />
+          <>
+            <video
+              ref={localVideoRef}
+              autoPlay
+              playsInline
+              muted
+              className={`w-full h-full object-cover ${isVideoOff ? 'opacity-0' : 'opacity-100'}`}
+              style={{ transform: 'scaleX(-1)' }}
+            />
+            
+            {/* Video Off Placeholder */}
+            {isVideoOff && (
+              <div className="absolute inset-0 flex items-center justify-center bg-slate-800">
+                <div className="text-center space-y-2">
+                  <div className="w-24 h-24 rounded-full bg-slate-700 flex items-center justify-center mx-auto">
+                    <VideoOff className="h-12 w-12 text-slate-400" />
+                  </div>
+                  <p className="text-slate-400">Câmera desativada</p>
+                </div>
               </div>
-              <p className="text-muted-foreground">Câmera desativada</p>
-            </div>
-          </div>
+            )}
+          </>
         )}
 
         {/* Status Indicators */}
         <div className="absolute bottom-4 left-4 flex gap-2">
           {isMuted && (
-            <div className="bg-destructive/90 text-destructive-foreground px-2 py-1 rounded-md flex items-center gap-1 text-sm">
-              <MicOff className="h-3 w-3" />
+            <div className="bg-red-500/90 text-white px-3 py-1.5 rounded-md flex items-center gap-1.5 text-sm font-medium">
+              <MicOff className="h-4 w-4" />
               <span>Mudo</span>
             </div>
           )}
           {screenStream && (
-            <div className="bg-primary/90 text-primary-foreground px-2 py-1 rounded-md flex items-center gap-1 text-sm">
-              <Monitor className="h-3 w-3" />
+            <div className="bg-primary/90 text-primary-foreground px-3 py-1.5 rounded-md flex items-center gap-1.5 text-sm font-medium">
+              <Monitor className="h-4 w-4" />
               <span>Compartilhando Tela</span>
+            </div>
+          )}
+          {!videoReady && !isVideoOff && !error && (
+            <div className="bg-yellow-500/90 text-white px-3 py-1.5 rounded-md flex items-center gap-1.5 text-sm font-medium">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Carregando vídeo...</span>
             </div>
           )}
         </div>
 
         {/* Self View (Picture-in-Picture when screen sharing) */}
         {screenStream && localStream && !isVideoOff && (
-          <div className="absolute bottom-4 right-4 w-48 aspect-video rounded-lg overflow-hidden border-2 border-background shadow-lg">
+          <div className="absolute bottom-4 right-4 w-48 aspect-video rounded-lg overflow-hidden border-2 border-white/20 shadow-lg bg-slate-800">
             <video
-              ref={localVideoRef}
+              ref={pipVideoRef}
               autoPlay
               playsInline
               muted
               className="w-full h-full object-cover"
+              style={{ transform: 'scaleX(-1)' }}
             />
           </div>
         )}
@@ -233,14 +314,25 @@ export function VideoConference({
               </div>
               <div className="h-4 w-px bg-border" />
               <div className="flex items-center gap-2 text-sm">
-                <span className={`w-2 h-2 rounded-full ${localStream ? 'bg-green-500' : 'bg-red-500'}`} />
+                <span className={`w-2 h-2 rounded-full ${localStream ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
                 <span className="text-muted-foreground">
                   {localStream ? 'Conectado' : 'Desconectado'}
                 </span>
               </div>
+              {localStream && (
+                <>
+                  <div className="h-4 w-px bg-border" />
+                  <div className="flex items-center gap-2 text-sm">
+                    <Video className="h-4 w-4 text-green-500" />
+                    <span className="text-muted-foreground">
+                      {isVideoOff ? 'Câmera desligada' : 'Câmera ligada'}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
-            <div className="text-sm text-muted-foreground">
-              {isHost ? 'Professor' : 'Aluno'}
+            <div className="text-sm text-muted-foreground font-medium">
+              {isHost ? '👨‍🏫 Professor' : '👨‍🎓 Aluno'}
             </div>
           </div>
         </CardContent>
