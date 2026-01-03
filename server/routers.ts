@@ -421,6 +421,213 @@ export const appRouter = router({
       }),
   }),
 
+  // ==================== LIVE CHAT ROUTES ====================
+  liveChat: router({
+    sendMessage: publicProcedure
+      .input(z.object({
+        sessionId: z.number(),
+        participantId: z.number(),
+        senderName: z.string(),
+        message: z.string().min(1).max(1000),
+      }))
+      .mutation(async ({ input }) => {
+        const chatMessage = await db.addLiveChatMessage({
+          sessionId: input.sessionId,
+          participantId: input.participantId,
+          senderName: input.senderName,
+          message: input.message,
+        });
+        return chatMessage;
+      }),
+
+    getMessages: publicProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getLiveChatMessages(input.sessionId);
+      }),
+  }),
+
+  // ==================== INTERACTIVE GRAPHS ROUTES ====================
+  graph: router({
+    create: protectedProcedure
+      .input(z.object({
+        sessionId: z.number(),
+        title: z.string().optional(),
+        graphType: z.enum(["linear", "quadratic", "cubic", "trigonometric", "exponential", "custom"]),
+        equation: z.string(),
+        config: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const session = await db.getSessionById(input.sessionId);
+        if (!session) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Sessão não encontrada" });
+        }
+
+        const room = await db.getRoomById(session.roomId);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Apenas o professor pode criar gráficos" });
+        }
+
+        const graph = await db.createInteractiveGraph({
+          sessionId: input.sessionId,
+          createdBy: ctx.user.id,
+          title: input.title ?? "Gráfico",
+          graphType: input.graphType,
+          equation: input.equation,
+          config: input.config ?? null,
+          isActive: true,
+        });
+
+        return graph;
+      }),
+
+    getBySession: publicProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getGraphsBySession(input.sessionId);
+      }),
+
+    getActive: publicProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getActiveGraphBySession(input.sessionId);
+      }),
+
+    setActive: protectedProcedure
+      .input(z.object({
+        graphId: z.number(),
+        isActive: z.boolean(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await db.updateGraph(input.graphId, { isActive: input.isActive });
+        return { success: true };
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.deleteGraph(input.id);
+        return { success: true };
+      }),
+  }),
+
+  // ==================== GAMIFICATION ROUTES ====================
+  exercise: router({
+    create: protectedProcedure
+      .input(z.object({
+        sessionId: z.number(),
+        question: z.string(),
+        questionLatex: z.string().optional(),
+        correctAnswer: z.string(),
+        points: z.number().default(10),
+        timeLimit: z.number().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const session = await db.getSessionById(input.sessionId);
+        if (!session) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Sessão não encontrada" });
+        }
+
+        const room = await db.getRoomById(session.roomId);
+        if (!room || room.hostId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Apenas o professor pode criar exercícios" });
+        }
+
+        // Deactivate previous exercises
+        await db.deactivateSessionExercises(input.sessionId);
+
+        const exercise = await db.createExercise({
+          sessionId: input.sessionId,
+          createdBy: ctx.user.id,
+          question: input.question,
+          questionLatex: input.questionLatex ?? null,
+          correctAnswer: input.correctAnswer,
+          points: input.points,
+          timeLimit: input.timeLimit ?? null,
+          isActive: true,
+        });
+
+        return exercise;
+      }),
+
+    getActive: publicProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getActiveExercise(input.sessionId);
+      }),
+
+    getBySession: publicProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getExercisesBySession(input.sessionId);
+      }),
+
+    submitAnswer: publicProcedure
+      .input(z.object({
+        exerciseId: z.number(),
+        participantId: z.number(),
+        answer: z.string(),
+      }))
+      .mutation(async ({ input }) => {
+        const exercise = await db.getExerciseById(input.exerciseId);
+        if (!exercise || !exercise.isActive) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Exercício não encontrado ou não está ativo" });
+        }
+
+        // Check if already answered
+        const existingResponse = await db.getExerciseResponse(input.exerciseId, input.participantId);
+        if (existingResponse) {
+          throw new TRPCError({ code: "CONFLICT", message: "Você já respondeu este exercício" });
+        }
+
+        // Check answer (case insensitive, trim whitespace)
+        const isCorrect = input.answer.trim().toLowerCase() === exercise.correctAnswer.trim().toLowerCase();
+        const pointsEarned = isCorrect ? exercise.points : 0;
+
+        // Save response
+        const response = await db.createExerciseResponse({
+          exerciseId: input.exerciseId,
+          participantId: input.participantId,
+          answer: input.answer,
+          isCorrect,
+          pointsEarned,
+        });
+
+        // Update participant score
+        await db.updateParticipantScore(exercise.sessionId, input.participantId, pointsEarned, isCorrect);
+
+        return {
+          ...response,
+          correctAnswer: exercise.correctAnswer,
+        };
+      }),
+
+    endExercise: protectedProcedure
+      .input(z.object({ exerciseId: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.updateExercise(input.exerciseId, { isActive: false });
+        return { success: true };
+      }),
+  }),
+
+  // ==================== SCORES/RANKING ROUTES ====================
+  score: router({
+    getRanking: publicProcedure
+      .input(z.object({ sessionId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getSessionRanking(input.sessionId);
+      }),
+
+    getMyScore: publicProcedure
+      .input(z.object({
+        sessionId: z.number(),
+        participantId: z.number(),
+      }))
+      .query(async ({ input }) => {
+        return db.getParticipantScore(input.sessionId, input.participantId);
+      }),
+  }),
+
   // ==================== DOCUMENT ROUTES ====================
   document: router({
     upload: protectedProcedure

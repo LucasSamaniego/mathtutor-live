@@ -357,3 +357,228 @@ export async function deleteDocument(id: number): Promise<void> {
 
   await db.delete(documents).where(eq(documents.id, id));
 }
+
+
+// ==================== LIVE CHAT FUNCTIONS ====================
+
+import { 
+  liveChat, InsertLiveChat, LiveChat,
+  interactiveGraphs, InsertInteractiveGraph, InteractiveGraph,
+  exercises, InsertExercise, Exercise,
+  exerciseResponses, InsertExerciseResponse, ExerciseResponse,
+  participantScores, InsertParticipantScore, ParticipantScore
+} from "../drizzle/schema";
+
+export async function addLiveChatMessage(message: InsertLiveChat): Promise<LiveChat | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.insert(liveChat).values(message);
+  const insertId = result[0].insertId;
+  const created = await db.select().from(liveChat).where(eq(liveChat.id, insertId)).limit(1);
+  return created[0];
+}
+
+export async function getLiveChatMessages(sessionId: number): Promise<LiveChat[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db.select().from(liveChat)
+    .where(eq(liveChat.sessionId, sessionId))
+    .orderBy(liveChat.createdAt);
+}
+
+// ==================== INTERACTIVE GRAPH FUNCTIONS ====================
+
+export async function createInteractiveGraph(graph: InsertInteractiveGraph): Promise<InteractiveGraph | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.insert(interactiveGraphs).values(graph);
+  const insertId = result[0].insertId;
+  const created = await db.select().from(interactiveGraphs).where(eq(interactiveGraphs.id, insertId)).limit(1);
+  return created[0];
+}
+
+export async function getGraphsBySession(sessionId: number): Promise<InteractiveGraph[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db.select().from(interactiveGraphs)
+    .where(eq(interactiveGraphs.sessionId, sessionId))
+    .orderBy(desc(interactiveGraphs.createdAt));
+}
+
+export async function getActiveGraphBySession(sessionId: number): Promise<InteractiveGraph | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.select().from(interactiveGraphs)
+    .where(and(eq(interactiveGraphs.sessionId, sessionId), eq(interactiveGraphs.isActive, true)))
+    .orderBy(desc(interactiveGraphs.createdAt))
+    .limit(1);
+  return result[0];
+}
+
+export async function updateGraph(id: number, data: Partial<InsertInteractiveGraph>): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  await db.update(interactiveGraphs).set(data).where(eq(interactiveGraphs.id, id));
+}
+
+export async function deleteGraph(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  await db.delete(interactiveGraphs).where(eq(interactiveGraphs.id, id));
+}
+
+// ==================== EXERCISE FUNCTIONS ====================
+
+export async function createExercise(exercise: InsertExercise): Promise<Exercise | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.insert(exercises).values(exercise);
+  const insertId = result[0].insertId;
+  const created = await db.select().from(exercises).where(eq(exercises.id, insertId)).limit(1);
+  return created[0];
+}
+
+export async function getExerciseById(id: number): Promise<Exercise | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.select().from(exercises).where(eq(exercises.id, id)).limit(1);
+  return result[0];
+}
+
+export async function getActiveExercise(sessionId: number): Promise<Exercise | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.select().from(exercises)
+    .where(and(eq(exercises.sessionId, sessionId), eq(exercises.isActive, true)))
+    .orderBy(desc(exercises.createdAt))
+    .limit(1);
+  return result[0];
+}
+
+export async function getExercisesBySession(sessionId: number): Promise<Exercise[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db.select().from(exercises)
+    .where(eq(exercises.sessionId, sessionId))
+    .orderBy(desc(exercises.createdAt));
+}
+
+export async function updateExercise(id: number, data: Partial<InsertExercise>): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  await db.update(exercises).set(data).where(eq(exercises.id, id));
+}
+
+export async function deactivateSessionExercises(sessionId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  await db.update(exercises).set({ isActive: false }).where(eq(exercises.sessionId, sessionId));
+}
+
+// ==================== EXERCISE RESPONSE FUNCTIONS ====================
+
+export async function createExerciseResponse(response: InsertExerciseResponse): Promise<ExerciseResponse | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.insert(exerciseResponses).values(response);
+  const insertId = result[0].insertId;
+  const created = await db.select().from(exerciseResponses).where(eq(exerciseResponses.id, insertId)).limit(1);
+  return created[0];
+}
+
+export async function getExerciseResponse(exerciseId: number, participantId: number): Promise<ExerciseResponse | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.select().from(exerciseResponses)
+    .where(and(eq(exerciseResponses.exerciseId, exerciseId), eq(exerciseResponses.participantId, participantId)))
+    .limit(1);
+  return result[0];
+}
+
+export async function getResponsesByExercise(exerciseId: number): Promise<ExerciseResponse[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db.select().from(exerciseResponses)
+    .where(eq(exerciseResponses.exerciseId, exerciseId))
+    .orderBy(exerciseResponses.createdAt);
+}
+
+// ==================== PARTICIPANT SCORE FUNCTIONS ====================
+
+export async function updateParticipantScore(sessionId: number, participantId: number, pointsEarned: number, isCorrect: boolean): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+
+  // Check if score record exists
+  const existing = await db.select().from(participantScores)
+    .where(and(eq(participantScores.sessionId, sessionId), eq(participantScores.participantId, participantId)))
+    .limit(1);
+
+  if (existing.length > 0) {
+    // Update existing score
+    await db.update(participantScores).set({
+      totalPoints: existing[0].totalPoints + pointsEarned,
+      correctAnswers: existing[0].correctAnswers + (isCorrect ? 1 : 0),
+      totalAnswers: existing[0].totalAnswers + 1,
+    }).where(eq(participantScores.id, existing[0].id));
+  } else {
+    // Create new score record
+    await db.insert(participantScores).values({
+      sessionId,
+      participantId,
+      totalPoints: pointsEarned,
+      correctAnswers: isCorrect ? 1 : 0,
+      totalAnswers: 1,
+    });
+  }
+}
+
+export async function getParticipantScore(sessionId: number, participantId: number): Promise<ParticipantScore | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db.select().from(participantScores)
+    .where(and(eq(participantScores.sessionId, sessionId), eq(participantScores.participantId, participantId)))
+    .limit(1);
+  return result[0];
+}
+
+export async function getSessionRanking(sessionId: number): Promise<(ParticipantScore & { participantName: string })[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  // Get all scores for the session
+  const scores = await db.select().from(participantScores)
+    .where(eq(participantScores.sessionId, sessionId))
+    .orderBy(desc(participantScores.totalPoints));
+
+  // Get participant names
+  const result = await Promise.all(scores.map(async (score) => {
+    const participant = await db.select().from(participants)
+      .where(eq(participants.id, score.participantId))
+      .limit(1);
+    
+    return {
+      ...score,
+      participantName: participant[0]?.visibleName || participant[0]?.guestName || "Anônimo"
+    };
+  }));
+
+  return result;
+}

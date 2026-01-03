@@ -15,6 +15,13 @@
       "when": 1767469617671,
       "tag": "0001_jazzy_vulcan",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1767471909911,
+      "tag": "0002_slim_galactus",
+      "breakpoints": true
     }
   ]
 }

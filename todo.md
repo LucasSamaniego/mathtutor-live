@@ -44,3 +44,30 @@
 - [x] Botão "Perguntar à IA" acessível
 - [x] Página inicial com criação/entrada em salas
 - [x] Dashboard do professor com histórico de sessões
+
+## Novos Recursos (v2)
+
+### Chat ao Vivo
+- [x] Componente de chat em tempo real entre participantes
+- [x] Mensagens sincronizadas na sessão
+- [x] Indicador de digitação
+- [x] Histórico de mensagens da sessão
+
+### Visualização PDF lado a lado
+- [x] Layout split-screen com PDF e vídeo
+- [x] Controles de navegação do PDF
+- [x] Sincronização de página entre professor e alunos
+- [x] Zoom e ajuste de visualização
+
+### Gráficos Interativos
+- [x] Ferramenta para professor criar gráficos matemáticos
+- [x] Suporte a funções (linear, quadrática, trigonométricas, exponenciais, cúbicas)
+- [x] Alunos podem interagir com os gráficos
+- [x] Controles de zoom e pan
+
+### Gamificação
+- [x] Sistema de pontos por acertos
+- [x] Professor cria exercícios durante a aula
+- [x] Alunos respondem e ganham pontos
+- [x] Ranking em tempo real dos participantes
+- [x] Feedback visual de acerto/erro

@@ -143,3 +143,90 @@ export const documents = mysqlTable("documents", {
 
 export type Document = typeof documents.$inferSelect;
 export type InsertDocument = typeof documents.$inferInsert;
+
+
+/**
+ * Live chat messages table - stores real-time chat between participants
+ */
+export const liveChat = mysqlTable("liveChat", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionId: int("sessionId").notNull(), // References sessions.id
+  participantId: int("participantId").notNull(), // References participants.id
+  senderName: varchar("senderName", { length: 255 }).notNull(),
+  message: text("message").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type LiveChat = typeof liveChat.$inferSelect;
+export type InsertLiveChat = typeof liveChat.$inferInsert;
+
+/**
+ * Interactive graphs table - stores graphs created by teachers
+ */
+export const interactiveGraphs = mysqlTable("interactiveGraphs", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionId: int("sessionId").notNull(), // References sessions.id
+  createdBy: int("createdBy").notNull(), // References users.id (teacher)
+  title: varchar("title", { length: 255 }),
+  graphType: mysqlEnum("graphType", ["linear", "quadratic", "cubic", "trigonometric", "exponential", "custom"]).default("linear").notNull(),
+  equation: varchar("equation", { length: 512 }).notNull(), // e.g., "y = 2x + 3"
+  config: text("config"), // JSON config for graph settings (colors, range, etc.)
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type InteractiveGraph = typeof interactiveGraphs.$inferSelect;
+export type InsertInteractiveGraph = typeof interactiveGraphs.$inferInsert;
+
+/**
+ * Exercises table - stores exercises created by teachers for gamification
+ */
+export const exercises = mysqlTable("exercises", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionId: int("sessionId").notNull(), // References sessions.id
+  createdBy: int("createdBy").notNull(), // References users.id (teacher)
+  question: text("question").notNull(),
+  questionLatex: text("questionLatex"), // LaTeX version of the question
+  correctAnswer: varchar("correctAnswer", { length: 255 }).notNull(),
+  points: int("points").default(10).notNull(),
+  timeLimit: int("timeLimit"), // Time limit in seconds (optional)
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Exercise = typeof exercises.$inferSelect;
+export type InsertExercise = typeof exercises.$inferInsert;
+
+/**
+ * Exercise responses table - stores student answers
+ */
+export const exerciseResponses = mysqlTable("exerciseResponses", {
+  id: int("id").autoincrement().primaryKey(),
+  exerciseId: int("exerciseId").notNull(), // References exercises.id
+  participantId: int("participantId").notNull(), // References participants.id
+  answer: varchar("answer", { length: 255 }).notNull(),
+  isCorrect: boolean("isCorrect").notNull(),
+  pointsEarned: int("pointsEarned").default(0).notNull(),
+  responseTime: int("responseTime"), // Time taken to answer in seconds
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ExerciseResponse = typeof exerciseResponses.$inferSelect;
+export type InsertExerciseResponse = typeof exerciseResponses.$inferInsert;
+
+/**
+ * Participant scores table - stores accumulated points per session
+ */
+export const participantScores = mysqlTable("participantScores", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionId: int("sessionId").notNull(), // References sessions.id
+  participantId: int("participantId").notNull(), // References participants.id
+  totalPoints: int("totalPoints").default(0).notNull(),
+  correctAnswers: int("correctAnswers").default(0).notNull(),
+  totalAnswers: int("totalAnswers").default(0).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ParticipantScore = typeof participantScores.$inferSelect;
+export type InsertParticipantScore = typeof participantScores.$inferInsert;

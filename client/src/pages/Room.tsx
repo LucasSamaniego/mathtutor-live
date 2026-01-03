@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useLocation } from "wouter";
 import { toast } from "sonner";
 import { 
@@ -25,16 +25,22 @@ import {
   GraduationCap,
   ChevronRight,
   ChevronLeft,
-  Send,
-  Upload,
-  X,
-  Maximize2,
-  Minimize2
+  MessageCircle,
+  LineChart,
+  Trophy,
+  PanelLeftClose,
+  PanelLeft
 } from "lucide-react";
 import { ShadowTutor } from "@/components/ShadowTutor";
 import { PdfViewer } from "@/components/PdfViewer";
 import { LatexEditor } from "@/components/LatexEditor";
 import { VideoConference } from "@/components/VideoConference";
+import { LiveChat } from "@/components/LiveChat";
+import { InteractiveGraph } from "@/components/InteractiveGraph";
+import { Gamification } from "@/components/Gamification";
+
+type MainView = "video" | "pdf" | "latex" | "graph";
+type RightPanel = "chat" | "gamification" | "shadowtutor" | null;
 
 export default function Room() {
   const { slug } = useParams<{ slug: string }>();
@@ -49,9 +55,9 @@ export default function Room() {
   
   // UI state
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<"video" | "pdf" | "latex">("video");
-  const [shadowTutorOpen, setShadowTutorOpen] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [mainView, setMainView] = useState<MainView>("video");
+  const [rightPanel, setRightPanel] = useState<RightPanel>("chat");
+  const [showPdfSidebar, setShowPdfSidebar] = useState(false);
   
   // Media state
   const [isMuted, setIsMuted] = useState(false);
@@ -166,6 +172,22 @@ export default function Room() {
     }
   };
 
+  // Toggle right panel
+  const toggleRightPanel = (panel: RightPanel) => {
+    if (rightPanel === panel) {
+      setRightPanel(null);
+    } else {
+      setRightPanel(panel);
+    }
+  };
+
+  // Get participant name
+  const getParticipantName = () => {
+    if (user?.name) return user.name;
+    if (guestName) return guestName;
+    return "Participante";
+  };
+
   // Loading state
   if (roomLoading) {
     return (
@@ -264,6 +286,14 @@ export default function Room() {
       {/* Header */}
       <header className="h-14 border-b bg-card flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="shrink-0"
+          >
+            {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
+          </Button>
           <div className="flex items-center gap-2">
             <GraduationCap className="h-6 w-6 text-primary" />
             <span className="font-semibold hidden sm:inline">MathTutor Live</span>
@@ -310,18 +340,39 @@ export default function Room() {
 
           <div className="h-6 w-px bg-border" />
 
+          {/* Right Panel Toggles */}
+          <Button
+            variant={rightPanel === "chat" ? "default" : "outline"}
+            size="icon"
+            onClick={() => toggleRightPanel("chat")}
+            title="Chat ao vivo"
+          >
+            <MessageCircle className="h-4 w-4" />
+          </Button>
+
+          <Button
+            variant={rightPanel === "gamification" ? "default" : "outline"}
+            size="icon"
+            onClick={() => toggleRightPanel("gamification")}
+            title="Desafios"
+          >
+            <Trophy className="h-4 w-4" />
+          </Button>
+
           {/* Shadow Tutor Button (students only) */}
           {!isHost && participantId && (
             <Button
-              variant={shadowTutorOpen ? "default" : "outline"}
+              variant={rightPanel === "shadowtutor" ? "default" : "outline"}
               size="sm"
-              onClick={() => setShadowTutorOpen(!shadowTutorOpen)}
+              onClick={() => toggleRightPanel("shadowtutor")}
               className="gap-2"
             >
               <MessageSquare className="h-4 w-4" />
               <span className="hidden sm:inline">Perguntar à IA</span>
             </Button>
           )}
+
+          <div className="h-6 w-px bg-border" />
 
           {/* Session Controls */}
           {isHost && !activeSession && (
@@ -346,22 +397,19 @@ export default function Room() {
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Sidebar - Participants & Tools */}
+        {/* Left Sidebar - Participants & Tools */}
         <aside className={`${sidebarOpen ? 'w-64' : 'w-0'} border-r bg-card transition-all duration-300 overflow-hidden shrink-0`}>
           <div className="h-full flex flex-col w-64">
-            {/* Tabs */}
             <Tabs defaultValue="participants" className="flex-1 flex flex-col">
               <TabsList className="w-full justify-start rounded-none border-b h-10 px-2">
                 <TabsTrigger value="participants" className="gap-1 text-xs">
                   <Users className="h-3 w-3" />
                   Participantes
                 </TabsTrigger>
-                {isHost && (
-                  <TabsTrigger value="tools" className="gap-1 text-xs">
-                    <Settings className="h-3 w-3" />
-                    Ferramentas
-                  </TabsTrigger>
-                )}
+                <TabsTrigger value="tools" className="gap-1 text-xs">
+                  <Settings className="h-3 w-3" />
+                  Ferramentas
+                </TabsTrigger>
               </TabsList>
 
               <TabsContent value="participants" className="flex-1 overflow-auto p-4 mt-0">
@@ -389,101 +437,153 @@ export default function Room() {
                 </div>
               </TabsContent>
 
-              {isHost && (
-                <TabsContent value="tools" className="flex-1 overflow-auto p-4 mt-0">
-                  <div className="space-y-4">
+              <TabsContent value="tools" className="flex-1 overflow-auto p-4 mt-0">
+                <div className="space-y-3">
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Visualização Principal</p>
+                  <Button
+                    variant={mainView === "video" ? "default" : "outline"}
+                    className="w-full justify-start gap-2"
+                    onClick={() => setMainView("video")}
+                  >
+                    <Video className="h-4 w-4" />
+                    Vídeo
+                  </Button>
+                  {isHost && (
+                    <>
+                      <Button
+                        variant={mainView === "pdf" ? "default" : "outline"}
+                        className="w-full justify-start gap-2"
+                        onClick={() => setMainView("pdf")}
+                      >
+                        <FileText className="h-4 w-4" />
+                        PDF
+                      </Button>
+                      <Button
+                        variant={mainView === "latex" ? "default" : "outline"}
+                        className="w-full justify-start gap-2"
+                        onClick={() => setMainView("latex")}
+                      >
+                        <span className="font-mono text-sm">∑</span>
+                        LaTeX
+                      </Button>
+                      <Button
+                        variant={mainView === "graph" ? "default" : "outline"}
+                        className="w-full justify-start gap-2"
+                        onClick={() => setMainView("graph")}
+                      >
+                        <LineChart className="h-4 w-4" />
+                        Gráficos
+                      </Button>
+                    </>
+                  )}
+
+                  <div className="border-t pt-3 mt-3">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Opções</p>
                     <Button
-                      variant={activeTab === "pdf" ? "default" : "outline"}
+                      variant={showPdfSidebar ? "default" : "outline"}
                       className="w-full justify-start gap-2"
-                      onClick={() => setActiveTab("pdf")}
+                      onClick={() => setShowPdfSidebar(!showPdfSidebar)}
                     >
                       <FileText className="h-4 w-4" />
-                      Visualizador PDF
-                    </Button>
-                    <Button
-                      variant={activeTab === "latex" ? "default" : "outline"}
-                      className="w-full justify-start gap-2"
-                      onClick={() => setActiveTab("latex")}
-                    >
-                      <span className="font-mono text-sm">∑</span>
-                      Editor LaTeX
-                    </Button>
-                    <Button
-                      variant={activeTab === "video" ? "default" : "outline"}
-                      className="w-full justify-start gap-2"
-                      onClick={() => setActiveTab("video")}
-                    >
-                      <Video className="h-4 w-4" />
-                      Apenas Vídeo
+                      PDF Lateral
                     </Button>
                   </div>
-                </TabsContent>
-              )}
+                </div>
+              </TabsContent>
             </Tabs>
           </div>
         </aside>
 
-        {/* Toggle Sidebar Button */}
-        <button
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-card border rounded-r-lg p-1 hover:bg-muted transition-colors"
-          style={{ left: sidebarOpen ? '256px' : '0' }}
-        >
-          {sidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-        </button>
-
         {/* Main Stage */}
-        <main className="flex-1 flex flex-col overflow-hidden relative">
-          {/* Content Area */}
-          <div className="flex-1 p-4 overflow-auto">
-            {activeTab === "video" && (
-              <VideoConference
-                roomSlug={slug || ""}
-                isHost={isHost || false}
-                isMuted={isMuted}
-                isVideoOff={isVideoOff}
-                isScreenSharing={isScreenSharing}
-              />
-            )}
-            
-            {activeTab === "pdf" && isHost && room && (
-              <PdfViewer roomId={room.id} isHost={isHost} />
-            )}
-            
-            {activeTab === "latex" && isHost && (
-              <LatexEditor />
-            )}
+        <main className="flex-1 flex overflow-hidden">
+          {/* Main Content Area */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Main View */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* Primary Content */}
+              <div className={`flex-1 p-4 overflow-auto ${showPdfSidebar && mainView === "video" ? "w-1/2" : ""}`}>
+                {mainView === "video" && (
+                  <VideoConference
+                    roomSlug={slug || ""}
+                    isHost={isHost || false}
+                    isMuted={isMuted}
+                    isVideoOff={isVideoOff}
+                    isScreenSharing={isScreenSharing}
+                  />
+                )}
+                
+                {mainView === "pdf" && isHost && room && (
+                  <PdfViewer roomId={room.id} isHost={isHost} />
+                )}
+                
+                {mainView === "latex" && isHost && (
+                  <LatexEditor />
+                )}
 
-            {/* For students, show what teacher is presenting */}
-            {!isHost && activeTab !== "video" && (
-              <div className="h-full flex items-center justify-center">
-                <p className="text-muted-foreground">
-                  Aguardando conteúdo do professor...
-                </p>
+                {mainView === "graph" && isHost && sessionId && (
+                  <InteractiveGraph sessionId={sessionId} isHost={isHost} />
+                )}
+
+                {/* For students, show what teacher is presenting */}
+                {!isHost && mainView !== "video" && (
+                  <div className="h-full flex items-center justify-center">
+                    <p className="text-muted-foreground">
+                      Aguardando conteúdo do professor...
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* PDF Sidebar (when enabled with video) */}
+              {showPdfSidebar && mainView === "video" && isHost && room && (
+                <div className="w-1/2 border-l p-4 overflow-auto">
+                  <PdfViewer roomId={room.id} isHost={isHost} />
+                </div>
+              )}
+            </div>
+
+            {/* Video Thumbnails (when not in video-only mode) */}
+            {mainView !== "video" && (
+              <div className="h-32 border-t bg-card p-2 shrink-0">
+                <div className="flex gap-2 h-full overflow-x-auto">
+                  <div className="aspect-video h-full bg-muted rounded-lg flex items-center justify-center">
+                    <Video className="h-6 w-6 text-muted-foreground" />
+                  </div>
+                </div>
               </div>
             )}
           </div>
 
-          {/* Video Thumbnails (when not in video-only mode) */}
-          {activeTab !== "video" && (
-            <div className="h-32 border-t bg-card p-2 shrink-0">
-              <div className="flex gap-2 h-full overflow-x-auto">
-                <div className="aspect-video h-full bg-muted rounded-lg flex items-center justify-center">
-                  <Video className="h-6 w-6 text-muted-foreground" />
-                </div>
-              </div>
-            </div>
+          {/* Right Panel */}
+          {rightPanel && participantId && sessionId && (
+            <aside className="w-80 border-l bg-card shrink-0 flex flex-col overflow-hidden">
+              {rightPanel === "chat" && (
+                <LiveChat
+                  sessionId={sessionId}
+                  participantId={participantId}
+                  participantName={getParticipantName()}
+                  isHost={isHost || false}
+                />
+              )}
+              
+              {rightPanel === "gamification" && (
+                <Gamification
+                  sessionId={sessionId}
+                  participantId={participantId}
+                  isHost={isHost || false}
+                />
+              )}
+
+              {rightPanel === "shadowtutor" && !isHost && (
+                <ShadowTutor
+                  sessionId={sessionId}
+                  participantId={participantId}
+                  onClose={() => setRightPanel(null)}
+                />
+              )}
+            </aside>
           )}
         </main>
-
-        {/* Shadow Tutor Sidebar */}
-        {shadowTutorOpen && participantId && sessionId && (
-          <ShadowTutor
-            sessionId={sessionId}
-            participantId={participantId}
-            onClose={() => setShadowTutorOpen(false)}
-          />
-        )}
       </div>
     </div>
   );
